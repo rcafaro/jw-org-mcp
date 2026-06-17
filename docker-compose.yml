@@ -1,0 +1,26 @@
+# JW.Org MCP Server
+# Connects to jw.org API and exposes tools via Model Context Protocol (stdio)
+# Usage: docker compose up -d
+# 
+# Configure MCP client to connect via stdio:
+#   command: docker
+#   args: [compose, -f, /path/to/docker-compose.yml, exec, jw-org-mcp, uv, run, jw-org-mcp]
+# 
+# Or run directly:
+#   docker run --env-file .env jw-org-mcp
+
+services:
+  jw-org-mcp:
+    build: .
+    container_name: jw-org-mcp
+    env_file: .env
+    environment:
+      - JWORG_MCP_CACHE_TTL_SECONDS=${JWORG_MCP_CACHE_TTL_SECONDS:-900}
+      - JWORG_MCP_ENABLE_CACHE=${JWORG_MCP_ENABLE_CACHE:-true}
+      - JWORG_MCP_REQUEST_TIMEOUT=${JWORG_MCP_REQUEST_TIMEOUT:-30}
+      - JWORG_MCP_MAX_RETRIES=${JWORG_MCP_MAX_RETRIES:-3}
+      - JWORG_MCP_DEFAULT_LANGUAGE=${JWORG_MCP_DEFAULT_LANGUAGE:-T}
+      - JWORG_MCP_DEFAULT_SEARCH_LIMIT=${JWORG_MCP_DEFAULT_SEARCH_LIMIT:-10}
+      - JWORG_MCP_LOG_LEVEL=${JWORG_MCP_LOG_LEVEL:-INFO}
+    restart: no
+
