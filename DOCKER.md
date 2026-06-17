@@ -10,3 +10,22 @@ docker run --rm jw-org-mcp 2>&1 | head -5
 
 # 4. Clean up build artifacts (optional)
 docker compose down --rmi local --volumes
+
+delete repo directory
+
+# 5. configure MCP server in Hermes Agent
+Add MCP Server and restart:
+
+name: jw-org
+{
+  "command": "docker",
+  "args": [
+    "run",
+    "-i",
+    "--rm",
+    "jw-org-mcp-jw-org-mcp"
+  ],
+  "timeout": 60,
+  "connect_timeout": 30
+}
+
