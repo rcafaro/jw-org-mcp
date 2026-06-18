@@ -42,7 +42,7 @@ class JWOrgClient:
         self,
         query: str,
         filter_type: str = "all",
-        language: str = "E",
+        language: str | None = None,
         limit: int = 10,
         offset: int = 0,
     ) -> tuple[SearchResponse, ResponseMetadata]:
@@ -61,11 +61,14 @@ class JWOrgClient:
         Raises:
             SearchError: If search fails
         """
+        # Resolve language: explicit arg, env var, or fallback to English
+        lang = language or settings.default_language
+
         # Parse query to extract meaningful search terms
         search_terms = QueryParser.extract_search_terms(query)
 
         # Check cache
-        cache_key_parts = (search_terms, filter_type, language, offset)
+        cache_key_parts = (search_terms, filter_type, lang, offset)
         if settings.enable_cache:
             cached = self._cache.get(*cache_key_parts)
             if cached is not None:
@@ -82,7 +85,7 @@ class JWOrgClient:
             # Build search URL
             search_url = (
                 f"{cdn_info.base_url}/apis/search/results/"
-                f"{language}/{filter_type}?q={search_terms}"
+                f"{lang}/{filter_type}?q={search_terms}"
             )
 
             if offset > 0:
@@ -123,7 +126,7 @@ class JWOrgClient:
                 query_params={
                     "query": search_terms,
                     "filter": filter_type,
-                    "language": language,
+                    "language": lang,
                     "offset": offset,
                 },
                 cache_hit=False,
@@ -203,13 +206,15 @@ class JWOrgClient:
             ) from e
 
     async def get_scripture(
-        self, reference: str, translation: str = "nwtsty"
+        self, reference: str, translation: str = "nwtsty", language: str | None = None
     ) -> tuple[dict[str, Any], ResponseMetadata]:
         """Get scripture content.
 
         Args:
             reference: Scripture reference (e.g., "John 3:16")
             translation: Bible translation code
+            language: Language code (E=English, P=Portuguese, etc).
+                      Falls back to settings.default_language if not provided.
 
         Returns:
             Tuple of (scripture data, ResponseMetadata)
@@ -218,7 +223,9 @@ class JWOrgClient:
             ContentRetrievalError: If content retrieval fails
         """
         # Search for the scripture reference
-        search_response, _ = await self.search(reference, filter_type="bible")
+        search_response, _ = await self.search(
+            reference, filter_type="bible", language=language or settings.default_language
+        )
 
         if not search_response.results:
             raise ContentRetrievalError(f"Scripture not found: {reference}")

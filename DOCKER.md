@@ -6,14 +6,9 @@
 docker compose build
 
 # 3. Test it runs (exits cleanly — stdio MCP servers are ephemeral)
-docker run --rm jw-org-mcp 2>&1 | head -5
+docker run --rm jw-org-mcp-jw-org-mcp 2>&1 | head -5
 
-# 4. Clean up build artifacts (optional)
-docker compose down --rmi local --volumes
-
-delete repo directory
-
-# 5. configure MCP server in Hermes Agent
+# 4. configure MCP server in Hermes Agent
 Add MCP Server and restart:
 
 name: jw-org
@@ -29,3 +24,7 @@ name: jw-org
   "connect_timeout": 30
 }
 
+# To clean up:
+docker compose down --rmi local --volumes
+
+delete repo directory

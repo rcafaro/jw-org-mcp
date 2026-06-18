@@ -56,8 +56,8 @@ async def list_tools() -> list[Tool]:
                     },
                     "language": {
                         "type": "string",
-                        "description": "Language code (E=English, S=Spanish, etc)",
-                        "default": "E",
+                        "description": "Language code (E=English, S=Spanish, T=Portuguese, etc)",
+                        "default": settings.default_language,
                     },
                     "limit": {
                         "type": "integer",
@@ -104,6 +104,11 @@ async def list_tools() -> list[Tool]:
                         "type": "string",
                         "description": "Bible translation code",
                         "default": "nwtsty",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language code (E=English, P=Portuguese, S=Spanish, etc)",
+                        "default": settings.default_language,
                     },
                 },
                 "required": ["reference"],
@@ -161,10 +166,13 @@ async def _handle_search(arguments: dict[str, Any]) -> list[TextContent]:
     """Handle search_content tool call."""
     query = arguments.get("query", "")
     filter_type = arguments.get("filter", "all")
-    language = arguments.get("language", "E")
+    language = arguments.get("language")
     limit = arguments.get("limit", 10)
 
-    logger.info(f"Searching: query={query}, filter={filter_type}, language={language}")
+    logger.info(
+        f"Searching: query={query}, filter={filter_type}, "
+        f"language={language or settings.default_language}"
+    )
 
     response, metadata = await client.search(
         query=query,
@@ -241,10 +249,11 @@ async def _handle_get_scripture(arguments: dict[str, Any]) -> list[TextContent]:
     """Handle get_scripture tool call."""
     reference = arguments.get("reference", "")
     translation = arguments.get("translation", "nwtsty")
+    language = arguments.get("language")
 
-    logger.info(f"Fetching scripture: {reference}")
+    logger.info(f"Fetching scripture: {reference} (lang={language or settings.default_language})")
 
-    scripture, metadata = await client.get_scripture(reference, translation)
+    scripture, metadata = await client.get_scripture(reference, translation, language)
 
     # Format scripture
     result_text = f"# {scripture['reference']}\n\n"

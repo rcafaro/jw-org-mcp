@@ -34,7 +34,7 @@ The JW.Org MCP Tool ensures that scriptural and doctrinal information comes excl
 
 ```bash
 # Clone the repository
-git clone https://github.com/Bjern/jw-org-mcp.git
+git clone https://github.com/rcafaro/jw-org-mcp.git
 cd jw-org-mcp
 
 # Install dependencies
@@ -63,6 +63,7 @@ To use this MCP server with Claude Desktop, add it to your Claude configuration 
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 **Configuration:**
+(for Docker use see DOCKER.md)
 
 ```json
 {
@@ -162,6 +163,7 @@ Get scripture text by reference.
 **Parameters:**
 - `reference` (required): Scripture reference (e.g., "John 3:16", "1 Thessalonians 5:3")
 - `translation` (optional): Bible translation code (default: "nwtsty")
+- `language` (optional): Language code - `E` for English, `S` for Spanish, etc. (default: `E`)
 
 **Example:**
 ```json
@@ -336,3 +338,4 @@ For issues and questions:
 - Built with [FastMCP](https://github.com/jlowin/fastmcp)
 - Uses the Model Context Protocol standard
 - Provides verified access to jw.org content
+- Thanks to https://github.com/Bjern/jw-org-mcp!
