@@ -360,16 +360,19 @@ class WOLParser:
         paragraphs: list[WOLParagraph] = []
         soup = BeautifulSoup(html, "lxml")
 
+        # Define tags to look for in order
+        content_tags = ["p", "span", "h1", "h2", "h3", "h4"]
+
         # --- Format A: bodyTxt ---
         body_div = soup.find("div", class_="bodyTxt")
         if body_div:
-            # We need to find page markers even in bodyTxt if they exist
-            # though they are usually in Format B.
             current_page = None
-
-            # Use find_all with a list of tags to preserve order
-            elements = body_div.find_all(["p", "span"])
+            elements = body_div.find_all(content_tags)
+            processed_elements = set()
             for elem in elements:
+                if elem in processed_elements:
+                    continue
+
                 if elem.name == "span" and "pageNum" in elem.get("class", []):
                     try:
                         current_page = int(elem.get("id", "").replace("page", ""))
@@ -377,63 +380,91 @@ class WOLParser:
                         pass
                     continue
 
-                if elem.name == "p":
-                    text = elem.get_text(separator=" ", strip=True)
-                    if not text:
-                        continue
-
-                    # Detect if it's a study question (e.g., "1, 2.", "14, 15.")
-                    # Heuristic: starts with "X, Y." or "X-Y."
-                    is_question = bool(re.match(r"^\d+[,–-]\s*\d+", text))
-
-                    # Extract first number
-                    m = re.match(r"^(\d+)[,.\s)]", text)
-                    num = int(m.group(1)) if m else None
-
-                    paragraphs.append(
-                        WOLParagraph(
-                            number=num,
-                            text=text,
-                            is_question=is_question,
-                            is_body=not is_question,
-                            page=current_page,
-                            source="bodyTxt",
-                        )
-                    )
-            return paragraphs
-
-        # --- Format B: Direct in article ---
-        article = soup.find("article", class_=re.compile(r"article document"))
-        if not article:
-            return paragraphs
-
-        current_page = None
-        # Use find_all with a list of tags to preserve order
-        # Also need to check inside paragraphs because markers can be nested
-        elements = article.find_all(["p", "span"], recursive=True)
-
-        # Track spans we've already processed if they were nested
-        processed_spans = set()
-
-        for elem in elements:
-            if elem.name == "span" and "pageNum" in elem.get("class", []):
-                if elem in processed_spans:
+                if elem.name not in ["p", "h1", "h2", "h3", "h4"]:
                     continue
-                try:
-                    current_page = int(elem.get("id", "").replace("page", ""))
-                except (ValueError, TypeError):
-                    pass
-                continue
 
-            if elem.name == "p":
-                # Check for page markers inside the paragraph BEFORE processing text
+                # Check for page markers inside BEFORE processing text
                 inner_spans = elem.find_all("span", class_="pageNum")
                 for span in inner_spans:
                     try:
                         current_page = int(span.get("id", "").replace("page", ""))
                     except (ValueError, TypeError):
                         pass
-                    processed_spans.add(span)
+                    processed_elements.add(span)
+
+                text = elem.get_text(separator=" ", strip=True)
+                if not text:
+                    continue
+
+                # Detect classes
+                p_classes = elem.get("class", [])
+                if isinstance(p_classes, str):
+                    p_classes = [p_classes]
+
+                is_header = elem.name in ["h1", "h2", "h3", "h4"]
+                is_question = "qu" in p_classes or bool(re.match(r"^\d+[,–-]\s*\d+", text))
+                is_body = "sb" in p_classes or (not is_question and not is_header)
+
+                # Extract paragraph number
+                num = None
+                par_num_span = elem.find("span", class_="parNum")
+                if par_num_span and par_num_span.has_attr("data-pnum"):
+                    try:
+                        num = int(par_num_span["data-pnum"])
+                    except (ValueError, TypeError):
+                        pass
+
+                if num is None:
+                    m = re.match(r"^(\d+)[,.\s)]", text)
+                    num = int(m.group(1)) if m else None
+
+                paragraphs.append(
+                    WOLParagraph(
+                        number=num,
+                        text=text,
+                        is_question=is_question,
+                        is_body=is_body,
+                        is_header=is_header,
+                        page=current_page,
+                        source="bodyTxt",
+                    )
+                )
+            return paragraphs
+
+        # --- Format B: Direct in article ---
+        # Some articles use article.scalableui, others article.article.document
+        article = soup.find("article", class_=re.compile(r"article|scalableui"))
+        if not article:
+            return paragraphs
+
+        current_page = None
+        # Use find_all with a list of tags to preserve order
+        elements = article.find_all(content_tags, recursive=True)
+
+        # Track spans we've already processed if they were nested
+        processed_elements = set()
+
+        for elem in elements:
+            if elem in processed_elements:
+                continue
+
+            if elem.name == "span" and "pageNum" in elem.get("class", []):
+                try:
+                    current_page = int(elem.get("id", "").replace("page", ""))
+                except (ValueError, TypeError):
+                    pass
+                continue
+
+            if elem.name in ["p", "h1", "h2", "h3", "h4"]:
+                # Check for page markers inside BEFORE processing text
+                inner_spans = elem.find_all("span", class_="pageNum")
+                for span in inner_spans:
+                    try:
+                        current_page = int(span.get("id", "").replace("page", ""))
+                    except (ValueError, TypeError):
+                        pass
+                    processed_elements.add(span)
+
                 text = elem.get_text(separator=" ", strip=True)
                 if not text:
                     continue
@@ -457,16 +488,18 @@ class WOLParser:
                 if isinstance(p_classes, str):
                     p_classes = [p_classes]
 
+                is_header = elem.name in ["h1", "h2", "h3", "h4"]
                 is_question = "qu" in p_classes or bool(re.match(r"^\d+[,–-]\s*\d+", text))
                 is_body = "sb" in p_classes
 
-                if num is not None or is_body or is_question:
+                if num is not None or is_body or is_question or is_header:
                     paragraphs.append(
                         WOLParagraph(
                             number=num,
                             text=text,
                             is_question=is_question,
                             is_body=is_body,
+                            is_header=is_header,
                             page=current_page,
                             source="direto",
                         )
@@ -488,7 +521,7 @@ class WOLParser:
         if start_num is None and start_page is None:
             return paragraphs
 
-        # If we have pages but no paragraph numbers, return all paragraphs on those pages
+        # If we have pages but no paragraph numbers, return all elements on those pages
         if start_page is not None and start_num is None:
             if end_page is None:
                 end_page = start_page
@@ -498,17 +531,11 @@ class WOLParser:
                 if p.page is not None and start_page <= p.page <= end_page
             ]
 
-            # Special case for "it book" entries that might start on a page
-            # and span multiple pages, but we only want the entry.
-            # If no paragraphs were found with explicit page numbers,
-            # we return everything if it's a small article,
-            # but usually WOL pages have markers.
             if results:
                 return results
 
             # If no page markers found but we have pages requested,
-            # maybe they are all on the same page (no markers).
-            # Return everything.
+            # return everything as it might all be on one page.
             return paragraphs
 
         # Traditional paragraph locating
@@ -536,8 +563,8 @@ class WOLParser:
         for n in range(start_num, end_num + 1):
             encontrado = None
 
-            # Method 1: Explicit paragraph number (skip questions)
-            matches = [p for p in work_set if p.number == n]
+            # Method 1: Explicit paragraph number (skip questions and headers)
+            matches = [p for p in work_set if p.number == n and not p.is_header]
             if matches:
                 matches.sort(key=lambda x: (not x.is_body, x.is_question))
                 if not matches[0].is_question:
@@ -548,17 +575,18 @@ class WOLParser:
                 filtered = [
                     p
                     for i, p in enumerate(work_set)
-                    if not (i == 0 and p.number is None and not p.is_question)
+                    if not (i == 0 and p.number is None and not p.is_question and not p.is_header)
                     and not p.is_question
+                    and not p.is_header
                 ]
                 if 1 <= n <= len(filtered):
                     encontrado = filtered[n - 1]
 
             # Method 3: Simple count
             if not encontrado:
-                no_questions = [p for p in work_set if not p.is_question]
-                if 1 <= n <= len(no_questions):
-                    encontrado = no_questions[n - 1]
+                no_questions_or_headers = [p for p in work_set if not p.is_question and not p.is_header]
+                if 1 <= n <= len(no_questions_or_headers):
+                    encontrado = no_questions_or_headers[n - 1]
 
             if encontrado:
                 results.append(encontrado)
