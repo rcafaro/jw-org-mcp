@@ -41,6 +41,57 @@ class JWOrgClient:
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
 
+    async def _get_wol_base_url(self, wol_code: str) -> str:
+        """Dynamically discover the WOL base URL for a language.
+
+        Args:
+            wol_code: WOL language code (e.g., 'en', 'pt', 'es')
+
+        Returns:
+            The discovered base URL
+        """
+        cache_key = f"wol_base_url:{wol_code}"
+        if settings.enable_cache:
+            cached = self._cache.get(cache_key)
+            if cached:
+                return cached
+
+        try:
+            # Navigate to wol.jw.org/{wol_code} to see where it redirects
+            discovery_url = f"https://wol.jw.org/{wol_code}"
+            logger.info(f"Discovering WOL base URL via: {discovery_url}")
+
+            client = await self._get_http_client()
+            # client follows redirects by default in _get_http_client
+            response = await client.get(discovery_url)
+            response.raise_for_status()
+
+            html = response.text
+            # Look for the search form action to find the current path pattern
+            # <form ... action="/pt/wol/qt/r5/lp-t">
+            # We use the search form action URL directly as requested by the user.
+            match = re.search(r'action="([^"]+)"', html)
+            if match:
+                action_url = match.group(1)
+                if action_url.startswith("/"):
+                    base_url = f"https://wol.jw.org{action_url}"
+                else:
+                    base_url = action_url
+            else:
+                # Fallback to the final redirected URL
+                base_url = str(response.url)
+
+            if settings.enable_cache:
+                self._cache.set(cache_key, value=base_url)
+
+            return base_url
+
+        except Exception as e:
+            logger.warning(f"Failed to discover dynamic WOL base URL for {wol_code}: {e}")
+            raise ContentRetrievalError(
+                f"Failed to discover WOL base URL for {wol_code}: {e}"
+            ) from e
+
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._http_client is None:
@@ -422,7 +473,7 @@ class JWOrgClient:
                     continue
 
             try:
-                base_url = f"https://wol.jw.org/{wol_info['code']}/wol/l/r1/{wol_info['lib']}"
+                base_url = await self._get_wol_base_url(wol_info["code"])
 
                 # Use cleaned query for search if it contains paragraph markers
                 search_query = sub_query
