@@ -50,16 +50,17 @@ def test_locate_paragraphs_no_criteria():
     res = WOLParser.locate_paragraphs(paragraphs, start_num=None, start_page=None)
     assert len(res) == 2
 
-def test_locate_paragraphs_preference():
+def test_locate_paragraphs_multiple_matches():
     paragraphs = [
         WOLParagraph(number=15, text="Question 15", is_question=True, is_body=False, source="test"),
         WOLParagraph(number=15, text="Answer 15", is_question=False, is_body=True, source="test"),
     ]
 
-    # Should prefer Answer 15 (is_body=True) over Question 15
+    # Should return both Question 15 and Answer 15
     res = WOLParser.locate_paragraphs(paragraphs, 15)
-    assert len(res) == 1
-    assert res[0].text == "Answer 15"
+    assert len(res) == 2
+    assert res[0].text == "Question 15"
+    assert res[1].text == "Answer 15"
 
 def test_locate_paragraphs_whole_page():
     paragraphs = [
