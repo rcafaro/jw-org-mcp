@@ -69,20 +69,17 @@ class JWOrgClient:
             html = response.text
             # Look for the search form action to find the current path pattern
             # <form ... action="/pt/wol/qt/r5/lp-t">
-            match = re.search(r'action="(/[^/]+/wol/([^/]+)/[^/]+/[^/"]+)"', html)
+            # We use the search form action URL directly as requested by the user.
+            match = re.search(r'action="([^"]+)"', html)
             if match:
-                # We want the 'lookup' variant which is usually /wol/l/
-                # but we'll try to find any existing /wol/l/ or /wol/s/ link first
-                # or just use the qt path and hope it redirects to l or s correctly.
-                # Investigation showed /wol/qt/ redirects to /wol/l/ or /wol/s/ when q is provided.
-                # To be most compatible with existing code that appends params to base_url,
-                # we'll build the /wol/l/ variant.
-                base_path = match.group(1)
-                qt_segment = match.group(2)
-                base_url = f"https://wol.jw.org{base_path.replace(f'/wol/{qt_segment}/', '/wol/l/')}"
+                action_url = match.group(1)
+                if action_url.startswith("/"):
+                    base_url = f"https://wol.jw.org{action_url}"
+                else:
+                    base_url = action_url
             else:
-                # Fallback to simple replacement if form not found
-                base_url = str(response.url).replace("/wol/h/", "/wol/l/")
+                # Fallback to the final redirected URL
+                base_url = str(response.url)
 
             if settings.enable_cache:
                 self._cache.set(cache_key, value=base_url)

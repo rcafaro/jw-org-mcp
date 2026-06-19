@@ -20,8 +20,8 @@ async def test_wol_base_url_discovery():
     with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
         base_url = await client._get_wol_base_url("pt")
 
-        # It should extract the path from form and replace qt with l
-        assert base_url == "https://wol.jw.org/pt/wol/l/r5/lp-t"
+        # It should extract the path from form exactly as it is
+        assert base_url == "https://wol.jw.org/pt/wol/qt/r5/lp-t"
         mock_http_client.get.assert_called_with("https://wol.jw.org/pt")
 
 @pytest.mark.asyncio
@@ -58,7 +58,7 @@ async def test_get_wol_reference_uses_discovered_url():
 
             # First call should be to discovery
             assert mock_http_client.get.call_args_list[0][0][0] == "https://wol.jw.org/pt"
-            # Second call should be to the discovered base URL (with /wol/l/ instead of /wol/qt/)
-            assert mock_http_client.get.call_args_list[1][0][0] == "https://wol.jw.org/pt/wol/l/r5/lp-t"
+            # Second call should be to the discovered base URL (exactly as in form action)
+            assert mock_http_client.get.call_args_list[1][0][0] == "https://wol.jw.org/pt/wol/qt/r5/lp-t"
             # And it should have the search query
             assert mock_http_client.get.call_args_list[1][1]["params"] == {"q": "w23.08"}
