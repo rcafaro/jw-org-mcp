@@ -79,7 +79,30 @@ npx @modelcontextprotocol/inspector uv run jw-org-mcp
 
 Once connected via MCP, you can use these tools:
 
+### get_wol_reference
+
+Retrieve specific paragraphs from a publication reference (e.g., 'w13 15/10 p. 27', 'cf p. 134'). 
+Supports precise paragraph extraction using exact numbering or positional counting. 
+
+It handles complex queries including page ranges (pp. 1041-1043), paragraph ranges (§§ 4-6), and multiple semicolon-separated references. For reference books (like the 'it' book), it can aggregate multiple entries appearing on the same page range.
+
+**Parameters:**
+- `query` (required): Publication reference (e.g., 'w13 15/10 p. 27', 'it-2 pp. 1041-1043')
+- `start` (optional): Starting paragraph number (default: 1)
+- `end` (optional): Ending paragraph number
+- `language` (optional): Language code - `E` for English, `T` for Portuguese, `S` for Spanish (default: `E`)
+
+**Example:**
+```json
+{
+  "query": "it-2 pp. 1041-1043",
+  "language": "E"
+}
+```
+
+
 ### Search Content
+Search natural language expressions (not publication references)
 
 ```json
 {

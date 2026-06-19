@@ -20,6 +20,7 @@ The JW.Org MCP Tool ensures that scriptural and doctrinal information comes excl
 - **Intelligent Query Parsing**: Extracts meaningful search terms from natural language queries
 - **Full Article Retrieval**: Get complete article content with scripture references
 - **Scripture Lookup**: Direct scripture reference search
+- **References Lookup**: understands jw references and extracts them
 - **Performance Optimized**: 15-minute caching, Brotli compression, async operations
 - **Structured Output**: Machine-readable responses with verification metadata
 
@@ -63,7 +64,6 @@ To use this MCP server with Claude Desktop, add it to your Claude configuration 
 - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 **Configuration:**
-(for Docker use see DOCKER.md)
 
 ```json
 {
@@ -80,23 +80,39 @@ To use this MCP server with Claude Desktop, add it to your Claude configuration 
   }
 }
 ```
-
 **Note:** Replace `E:\\Projects\\Python\\jw-org-mcp` with the actual path to your project directory. On Windows, use double backslashes (`\\`) in the path.
 
->WINDOWS -> FEB 2026 -> If you are using this as a custom connector MCP tool, then, you might find that the Claude Desktop app on Windows is not working properly. The app does not launch, etc...
->
->This is because, there is a bug that the new app (Since Feb 2026) has changed it's default folder to the MSIX virtualized path:
->
->C:\Users\{username}\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude_desktop_config.json
->
-> Or paste %localappdata%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude in the windows Run dialog.
+### Adding to Hermes Agent
 
-After saving the configuration:
-1. Restart Claude Desktop
-2. The JW.Org MCP tools will be available in your conversations
-3. Look for tools like `search_content`, `get_article`, `get_jw_captions`, and `get_scripture`
+To use this MCP server with Claude Desktop, add it to your hermes agent MCP configuration file:
 
-### Configuration
+**Location:**
+- linux: `~/.hermes/config.yaml` (or under the profiles/name structure if configured for a specific profile)
+
+**Configuration:**
+Adjust to where you installed the skill below. In my case:
+
+```json
+{
+  "mcpServers": {
+    "jw-org": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "~./.hermes/profiles/jw/skills/research/jw-research/scripts/jw-org-mcp",
+        "run",
+        "jw-org-mcp"
+      ]
+    }
+  }
+}
+```
+
+### Docker
+see DOCKER.md
+
+
+## Configuration
 
 Configuration is done via environment variables with the prefix `JWORG_MCP_`:
 
@@ -119,9 +135,30 @@ export JWORG_MCP_LOG_LEVEL=INFO
 
 ## MCP Tools
 
+### get_wol_reference
+
+Retrieve specific paragraphs from a publication reference (e.g., 'w13 15/10 p. 27', 'cf p. 134'). 
+Supports precise paragraph extraction using exact numbering or positional counting. 
+
+It handles complex queries including page ranges (pp. 1041-1043), paragraph ranges (§§ 4-6), and multiple semicolon-separated references. For reference books (like the 'it' book), it can aggregate multiple entries appearing on the same page range.
+
+**Parameters:**
+- `query` (required): Publication reference (e.g., 'w13 15/10 p. 27', 'it-2 pp. 1041-1043')
+- `start` (optional): Starting paragraph number (default: 1)
+- `end` (optional): Ending paragraph number
+- `language` (optional): Language code - `E` for English, `T` for Portuguese, `S` for Spanish (default: `E`).
+
+**Example:**
+```json
+{
+  "query": "it-2 pp. 1041-1043",
+  "language": "E"
+}
+```
+
 ### search_content
 
-Search JW.Org content across multiple types.
+Search JW.Org content across multiple types using natural language
 
 **Parameters:**
 - `query` (required): Search query - can be natural language
@@ -137,7 +174,6 @@ Search JW.Org content across multiple types.
   "limit": 5
 }
 ```
-
 The query parser automatically extracts "love" as the search term.
 
 ### get_article
@@ -157,7 +193,6 @@ When given a publication-level URL (e.g., a magazine issue), the tool returns a 
 ```
 
 ### get_jw_captions
-
 Fetch video captions and metadata by video ID or any JW.org URL. Returns the video title, thumbnail URL, and subtitles.
 
 **Parameters:**
@@ -354,4 +389,6 @@ For issues and questions:
 - Built with [FastMCP](https://github.com/jlowin/fastmcp)
 - Uses the Model Context Protocol standard
 - Provides verified access to jw.org content
-- Thanks to https://github.com/Bjern/jw-org-mcp!
+- Thanks to Bjern - originally forked from https://github.com/Bjern/jw-org-mcp
+- Thanks to Advenimus - video captions logic refactored from https://github.com/advenimus/jw-mcp
+
