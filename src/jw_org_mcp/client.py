@@ -1,8 +1,10 @@
 """JW.Org API client."""
 
 import logging
+import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -10,7 +12,13 @@ from .auth import AuthManager
 from .cache import Cache
 from .config import settings
 from .exceptions import ContentRetrievalError, SearchError
-from .models import ArticleContent, PublicationIndex, ResponseMetadata, SearchResponse
+from .models import (
+    ArticleContent,
+    PublicationIndex,
+    ResponseMetadata,
+    SearchResponse,
+    VideoCaptions,
+)
 from .parser import ArticleParser, QueryParser, SearchResponseParser
 
 logger = logging.getLogger(__name__)
@@ -204,6 +212,137 @@ class JWOrgClient:
             raise ContentRetrievalError(
                 f"Unexpected error fetching article: {e}"
             ) from e
+
+    def _extract_video_id(self, video_id_or_url: str) -> str:
+        """Extract video ID from JW.Org URL or return as-is.
+
+        Args:
+            video_id_or_url: Video ID or JW.Org URL
+
+        Returns:
+            Extracted video ID
+        """
+        if not video_id_or_url.startswith("http"):
+            return video_id_or_url
+
+        try:
+            parsed = urlparse(video_id_or_url)
+            query_params = parse_qs(parsed.query)
+
+            # Check for 'lank' parameter
+            if "lank" in query_params:
+                return query_params["lank"][0]
+
+            # Check for 'docid' parameter
+            if "docid" in query_params:
+                return query_params["docid"][0]
+
+            # Check pathname for pub- pattern
+            match = re.search(r"/(pub-[^/]+)", parsed.path)
+            if match:
+                return match.group(1)
+
+            # Check fragment for pub- pattern
+            if parsed.fragment:
+                match = re.search(r"(pub-[^/]+)", parsed.fragment)
+                if match:
+                    return match.group(1)
+
+            return video_id_or_url
+        except Exception as e:
+            logger.warning(f"Failed to parse video URL: {e}")
+            return video_id_or_url
+
+    async def get_video_captions(
+        self, video_id: str, language: str | None = None
+    ) -> tuple[VideoCaptions, ResponseMetadata]:
+        """Get video captions and metadata.
+
+        Args:
+            video_id: Video ID or JW.Org URL
+            language: Language code (default: E for English)
+
+        Returns:
+            Tuple of (VideoCaptions, ResponseMetadata)
+
+        Raises:
+            ContentRetrievalError: If content retrieval fails
+        """
+        lang = language or settings.default_language
+        extracted_id = self._extract_video_id(video_id)
+
+        # Check cache
+        cache_key = f"captions:{extracted_id}:{lang}"
+        if settings.enable_cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info(f"Cache hit for video captions: {extracted_id}")
+                content, metadata = cached
+                metadata.cache_hit = True
+                return content, metadata
+
+        try:
+            # Step 1: Get media metadata from CDN
+            cdn_info = await self._auth_manager.discover_cdn()
+            # The API uses language codes like E, S, etc.
+            media_url = f"{cdn_info.base_url}/apis/mediator/v1/media-items/{lang}/{extracted_id}?clientType=www"
+
+            logger.info(f"Fetching video metadata: {media_url}")
+            client = await self._get_http_client()
+            response = await client.get(media_url)
+            response.raise_for_status()
+            media_data = response.json()
+
+            if not media_data.get("media") or not media_data["media"][0].get("files"):
+                raise ContentRetrievalError(f"No media found for video ID: {extracted_id}")
+
+            media = media_data["media"][0]
+            title = media.get("title", "Unknown Title")
+            thumbnail = media.get("images", {}).get("wss", {}).get("sm", "")
+
+            # Look for subtitles
+            subtitles_url = None
+            for file in media.get("files", []):
+                if file.get("subtitles") and file["subtitles"].get("url"):
+                    subtitles_url = file["subtitles"]["url"]
+                    break
+
+            if not subtitles_url:
+                raise ContentRetrievalError(f"No subtitles found for video ID: {extracted_id}")
+
+            # Step 2: Fetch subtitles
+            logger.info(f"Fetching subtitles: {subtitles_url}")
+            sub_response = await client.get(subtitles_url)
+            sub_response.raise_for_status()
+            subtitles = sub_response.text
+
+            captions = VideoCaptions(
+                title=title,
+                thumbnail=thumbnail,
+                subtitles=subtitles,
+                source_url=subtitles_url,
+            )
+
+            metadata = ResponseMetadata(
+                source_domain="jw-cdn.org",
+                source_url=media_url,
+                timestamp=datetime.now(UTC),
+                query_params={"video_id": video_id, "language": lang},
+                cache_hit=False,
+            )
+
+            # Cache result
+            if settings.enable_cache:
+                self._cache.set(cache_key, value=(captions, metadata))
+
+            return captions, metadata
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching video captions: {e}")
+            raise ContentRetrievalError(f"Failed to fetch video captions: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error fetching video captions: {e}")
+            raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
 
     async def get_scripture(
         self, reference: str, translation: str = "nwtsty", language: str | None = None
