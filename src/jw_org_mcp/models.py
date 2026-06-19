@@ -72,6 +72,27 @@ class VideoCaptions(BaseModel):
     source_url: str
 
 
+class WOLParagraph(BaseModel):
+    """A single paragraph from WOL."""
+
+    number: int | None = None
+    text: str
+    is_question: bool = False
+    is_body: bool = True
+    page: int | None = None
+    source: str
+
+
+class WOLReferenceResponse(BaseModel):
+    """Response for a WOL reference extraction."""
+
+    query: str
+    paragraphs: list[WOLParagraph]
+    total_paragraphs_in_article: int
+    pages: list[int] = Field(default_factory=list)
+    source_url: str
+
+
 class ResponseMetadata(BaseModel):
     """Metadata for all responses."""
 
