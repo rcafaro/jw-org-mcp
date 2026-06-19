@@ -457,16 +457,48 @@ class WOLParser:
             if end_page is None:
                 end_page = start_page
 
-            results = [
-                p for p in paragraphs
-                if p.page is not None and start_page <= p.page <= end_page
-            ]
+            results = []
+            current_element_page = None
+            pending_headers = []
+
+            # Heuristic: find the first page marker to know the starting context
+            first_marker = next((p.page for p in paragraphs if p.page is not None), None)
+            if first_marker is not None:
+                current_element_page = first_marker
+
+            for p in paragraphs:
+                if p.page is not None:
+                    current_element_page = p.page
+
+                if p.is_header:
+                    pending_headers.append(p)
+                    continue
+
+                # Use last known page for elements without explicit markers
+                effective_page = current_element_page
+
+                if effective_page is not None:
+                    if start_page <= effective_page <= end_page:
+                        results.extend(pending_headers)
+                        results.append(p)
+                        pending_headers = []
+                    else:
+                        pending_headers = []
+                else:
+                    # No page marker found yet.
+                    # If the article has NO page markers at all, include everything.
+                    if not any(para.page is not None for para in paragraphs):
+                        results.extend(pending_headers)
+                        results.append(p)
+                        pending_headers = []
+                    else:
+                        # Keep headers pending until we find a page
+                        pass
 
             if results:
                 return results
 
-            # If no page markers found but we have pages requested,
-            # return everything as it might all be on one page.
+            # Final fallback: return everything if pages were requested but no specific markers found
             return paragraphs
 
         # Traditional paragraph locating

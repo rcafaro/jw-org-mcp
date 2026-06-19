@@ -532,8 +532,12 @@ class JWOrgClient:
 
                     # Heuristic for it-books: collect articles that might be relevant
                     if "it-" in sub_query.lower() and len(links) > 1:
-                        # Follow up to top 3 if they seem relevant (too complex to perfectly match page ranges in link text)
-                        article_paths = [l["url"] for l in links[:3]]
+                        if s_page is not None:
+                            # User requested a page: collect ALL links on that page to consolidate
+                            article_paths = [l["url"] for l in links]
+                        else:
+                            # User requested a word: follow up to top 3
+                            article_paths = [l["url"] for l in links[:3]]
 
                     sub_all_paragraphs = []
                     for path in article_paths:
