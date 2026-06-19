@@ -41,6 +41,15 @@ def test_locate_paragraphs():
     res = WOLParser.locate_paragraphs(paragraphs_no_num, 1)
     assert res[0].text == "Para 1"
 
+def test_locate_paragraphs_no_criteria():
+    paragraphs = [
+        WOLParagraph(number=1, text="P1", source="test"),
+        WOLParagraph(number=2, text="P2", source="test"),
+    ]
+    # If no paragraph number and no page is specified, it should now return all paragraphs
+    res = WOLParser.locate_paragraphs(paragraphs, start_num=None, start_page=None)
+    assert len(res) == 2
+
 def test_locate_paragraphs_preference():
     paragraphs = [
         WOLParagraph(number=15, text="Question 15", is_question=True, is_body=False, source="test"),

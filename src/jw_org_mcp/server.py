@@ -125,8 +125,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "start": {
                         "type": "integer",
-                        "description": "Starting paragraph number",
-                        "default": 1,
+                        "description": "Starting paragraph number (optional)",
                     },
                     "end": {
                         "type": "integer",
@@ -265,7 +264,7 @@ async def _handle_search(arguments: dict[str, Any]) -> list[TextContent]:
 async def _handle_get_wol_reference(arguments: dict[str, Any]) -> list[TextContent]:
     """Handle get_wol_reference tool call."""
     query = arguments.get("query", "")
-    start = arguments.get("start", 1)
+    start = arguments.get("start")
     end = arguments.get("end")
     language = arguments.get("language")
 
