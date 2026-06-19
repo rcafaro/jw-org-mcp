@@ -110,6 +110,38 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_wol_reference",
+            description=(
+                "Retrieve specific paragraphs from a publication reference "
+                "(e.g., 'w13 15/10 p. 27', 'cf p. 134'). "
+                "Supports exact paragraph numbers or positional counting."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Publication reference (e.g., 'w13 15/10 p. 27')",
+                    },
+                    "start": {
+                        "type": "integer",
+                        "description": "Starting paragraph number",
+                        "default": 1,
+                    },
+                    "end": {
+                        "type": "integer",
+                        "description": "Ending paragraph number (optional)",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language code (E=English, T=Portuguese, S=Spanish)",
+                        "default": settings.default_language,
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        Tool(
             name="get_scripture",
             description=(
                 "Get scripture text by reference (e.g., 'John 3:16', '1 Thessalonians 5:3'). "
@@ -153,6 +185,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
     try:
         if name == "search_content":
             return await _handle_search(arguments)
+        elif name == "get_wol_reference":
+            return await _handle_get_wol_reference(arguments)
         elif name == "get_article":
             return await _handle_get_article(arguments)
         elif name == "get_scripture":
@@ -224,6 +258,46 @@ async def _handle_search(arguments: dict[str, Any]) -> list[TextContent]:
             result_text += f"{result.snippet}\n\n"
             result_text += f"**URL:** {result.url}\n\n"
             result_text += "---\n\n"
+
+    return [TextContent(type="text", text=result_text)]
+
+
+async def _handle_get_wol_reference(arguments: dict[str, Any]) -> list[TextContent]:
+    """Handle get_wol_reference tool call."""
+    query = arguments.get("query", "")
+    start = arguments.get("start", 1)
+    end = arguments.get("end")
+    language = arguments.get("language")
+
+    logger.info(
+        f"Fetching WOL reference: query={query}, start={start}, end={end}, "
+        f"language={language or settings.default_language}"
+    )
+
+    content, metadata = await client.get_wol_reference(
+        query=query,
+        start_paragraph=start,
+        end_paragraph=end,
+        language=language,
+    )
+
+    # Format response
+    result_text = f"# Reference: {content.query}\n\n"
+    result_text += f"**Source:** {metadata.source_url}\n"
+    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
+    result_text += f"**Cached:** {metadata.cache_hit}\n"
+    if content.pages:
+        result_text += f"**Pages:** {content.pages[0]}–{content.pages[-1]}\n"
+    result_text += f"**Total paragraphs in article:** {content.total_paragraphs_in_article}\n\n"
+
+    result_text += "---\n\n"
+
+    if not content.paragraphs:
+        result_text += "No paragraphs found for the specified range.\n"
+    else:
+        for p in content.paragraphs:
+            label = f"§{p.number}" if p.number else "§[pos]"
+            result_text += f"**{label}:** {p.text}\n\n"
 
     return [TextContent(type="text", text=result_text)]
 

@@ -7,7 +7,13 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from .exceptions import ParseError
-from .models import ArticleContent, PublicationIndex, PublicationIndexEntry, SearchResult
+from .models import (
+    ArticleContent,
+    PublicationIndex,
+    PublicationIndexEntry,
+    SearchResult,
+    WOLParagraph,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -309,3 +315,182 @@ class ArticleParser:
             articles=entries,
             source_url=url,
         )
+
+
+class WOLParser:
+    """Parses content specifically from wol.jw.org with paragraph tracking."""
+
+    @staticmethod
+    def clean_query(query: str) -> str:
+        """Remove paragraph/page details from query for better WOL searching.
+
+        Examples:
+            "cf p. 134 pars. 14,15" -> "cf p. 134"
+            "w13 15/10 p. 27 § 1" -> "w13 15/10 p. 27"
+        """
+        original = query
+        # Remove: "pars. 14,15", "par. 1", "parágrafo 1", "pars 14-15" etc.
+        query = re.sub(
+            r"\b(?:pars?\.?\s*|parágrafo[s]?\s*)[\d,\-–\s]+$", "", query
+        ).strip()
+        # Remove: "§ 1", "§§ 14-15" etc.
+        query = re.sub(r"\s*§{1,2}\s*[\d,\-–\s]+$", "", query).strip()
+        # Remove trailing punctuation (but preserve "p. 134")
+        query = re.sub(r"[,;.\s]+$", "", query).strip()
+        return query if query else original
+
+    @staticmethod
+    def is_lookup_page(html: str) -> bool:
+        """Check if the HTML is a lookup/search results page."""
+        return 'class="article lookup"' in html or "lookupResults" in html
+
+    @staticmethod
+    def extract_page_markers(html: str) -> list[int]:
+        """Extract page numbers from HTML."""
+        return [
+            int(m)
+            for m in re.findall(
+                r'<span[^>]*id="page(\d+)"[^>]*class="pageNum"[^>]*></span>', html
+            )
+        ]
+
+    @staticmethod
+    def parse_paragraphs(html: str) -> list[WOLParagraph]:
+        """Extract paragraphs with metadata from WOL HTML."""
+        paragraphs: list[WOLParagraph] = []
+        soup = BeautifulSoup(html, "lxml")
+
+        # --- Format A: bodyTxt ---
+        body_div = soup.find("div", class_="bodyTxt")
+        if body_div:
+            p_tags = body_div.find_all("p")
+            for p in p_tags:
+                text = p.get_text(separator=" ", strip=True)
+                if not text:
+                    continue
+
+                # Detect if it's a study question (e.g., "1, 2.", "14, 15.")
+                is_question = bool(re.match(r"^\d+,\s*\d+", text))
+
+                # Extract first number
+                m = re.match(r"^(\d+)[,.\s)]", text)
+                num = int(m.group(1)) if m else None
+
+                paragraphs.append(
+                    WOLParagraph(
+                        number=num,
+                        text=text,
+                        is_question=is_question,
+                        is_body=not is_question,
+                        source="bodyTxt",
+                    )
+                )
+            return paragraphs
+
+        # --- Format B: Direct in article ---
+        article = soup.find("article", class_=re.compile(r"article document"))
+        if not article:
+            return paragraphs
+
+        p_tags = article.find_all("p")
+        for p in p_tags:
+            text = p.get_text(separator=" ", strip=True)
+            if not text:
+                continue
+
+            # Check for parNum span
+            par_num_span = p.find("span", class_="parNum")
+            num = None
+            if par_num_span and par_num_span.has_attr("data-pnum"):
+                try:
+                    num = int(par_num_span["data-pnum"])
+                except (ValueError, TypeError):
+                    pass
+
+            # If no parNum, try start of text
+            if num is None:
+                m = re.match(r"^(\d+)[,.\s)]", text)
+                num = int(m.group(1)) if m else None
+
+            # Detect classes
+            p_classes = p.get("class", [])
+            if isinstance(p_classes, str):
+                p_classes = [p_classes]
+
+            is_question = "qu" in p_classes or bool(re.match(r"^\d+,\s*\d+", text))
+            is_body = "sb" in p_classes
+
+            if num is not None or is_body or is_question:
+                paragraphs.append(
+                    WOLParagraph(
+                        number=num,
+                        text=text,
+                        is_question=is_question,
+                        is_body=is_body,
+                        source="direto",
+                    )
+                )
+
+        return paragraphs
+
+    @staticmethod
+    def locate_paragraphs(
+        paragraphs: list[WOLParagraph], start_num: int, end_num: int | None = None
+    ) -> list[WOLParagraph]:
+        """Locate specific paragraphs by number or position."""
+        if end_num is None:
+            end_num = start_num
+
+        results: list[WOLParagraph] = []
+        for n in range(start_num, end_num + 1):
+            encontrado = None
+
+            # Method 1: Explicit paragraph number (skip questions)
+            # Preference: body text > question
+            matches = [p for p in paragraphs if p.number == n]
+            if matches:
+                # Prioritize body paragraphs, then non-questions
+                matches.sort(key=lambda x: (not x.is_body, x.is_question))
+                if not matches[0].is_question:
+                    encontrado = matches[0]
+
+            # Method 2: Positional counting (skipping 1st if it's a continuation, and skipping questions)
+            if not encontrado:
+                filtered = [
+                    p
+                    for i, p in enumerate(paragraphs)
+                    if not (i == 0 and p.number is None and not p.is_question)
+                    and not p.is_question
+                ]
+                if 1 <= n <= len(filtered):
+                    encontrado = filtered[n - 1]
+
+            # Method 3: Simple count of content paragraphs
+            if not encontrado:
+                no_questions = [p for p in paragraphs if not p.is_question]
+                if 1 <= n <= len(no_questions):
+                    encontrado = no_questions[n - 1]
+
+            if encontrado:
+                results.append(encontrado)
+
+        return results
+
+    @staticmethod
+    def extract_lookup_links(html: str) -> list[dict[str, str]]:
+        """Extract article links from a lookup page."""
+        links = []
+        # Look for /lang/wol/d/rX/lp-X/DOCID
+        pattern = r'href="(/[^/]+/wol/d/[^/]+/[^/]+/(\d+)[^"]*)"'
+        for m in re.finditer(pattern, html):
+            url = m.group(1)
+            doc_id = m.group(2)
+            # Remove fragment
+            clean_url = url.split("#")[0]
+            links.append(
+                {
+                    "doc_id": doc_id,
+                    "url": clean_url,
+                }
+            )
+        return links

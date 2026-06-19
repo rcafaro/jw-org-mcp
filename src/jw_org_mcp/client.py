@@ -18,14 +18,22 @@ from .models import (
     ResponseMetadata,
     SearchResponse,
     VideoCaptions,
+    WOLReferenceResponse,
 )
-from .parser import ArticleParser, QueryParser, SearchResponseParser
+from .parser import ArticleParser, QueryParser, SearchResponseParser, WOLParser
 
 logger = logging.getLogger(__name__)
 
 
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
+
+    # Mapping from MCP language codes to WOL language and library codes
+    WOL_LANG_MAP = {
+        "E": {"code": "en", "lib": "lp-e"},
+        "T": {"code": "pt", "lib": "lp-t"},
+        "S": {"code": "es", "lib": "lp-s"},
+    }
 
     def __init__(self) -> None:
         """Initialize the client."""
@@ -343,6 +351,127 @@ class JWOrgClient:
         except Exception as e:
             logger.error(f"Unexpected error fetching video captions: {e}")
             raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
+
+    async def get_wol_reference(
+        self,
+        query: str,
+        start_paragraph: int = 1,
+        end_paragraph: int | None = None,
+        language: str | None = None,
+    ) -> tuple[WOLReferenceResponse, ResponseMetadata]:
+        """Fetch specific paragraphs from a publication reference on WOL.
+
+        Args:
+            query: Publication reference (e.g., "w13 15/10 p. 27")
+            start_paragraph: Starting paragraph number
+            end_paragraph: Ending paragraph number (optional)
+            language: Language code (default: E for English)
+
+        Returns:
+            Tuple of (WOLReferenceResponse, ResponseMetadata)
+
+        Raises:
+            ContentRetrievalError: If content retrieval fails
+        """
+        lang_code = language or settings.default_language
+        wol_info = self.WOL_LANG_MAP.get(lang_code, self.WOL_LANG_MAP["E"])
+
+        # Check cache
+        cache_key = f"wol_ref:{query}:{start_paragraph}:{end_paragraph}:{lang_code}"
+        if settings.enable_cache:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                logger.info(f"Cache hit for WOL reference: {query}")
+                content, metadata = cached
+                metadata.cache_hit = True
+                return content, metadata
+
+        try:
+            # Step 1: Initial search URL
+            # Example: https://wol.jw.org/pt/wol/l/r5/lp-t?q=...
+            base_url = f"https://wol.jw.org/{wol_info['code']}/wol/l/r1/{wol_info['lib']}"
+
+            logger.info(f"Fetching WOL reference: {base_url} (query={query})")
+            client = await self._get_http_client()
+            response = await client.get(base_url, params={"q": query})
+            response.raise_for_status()
+
+            html = response.text
+            final_url = str(response.url)
+
+            # Step 2: Handle lookup page
+            if WOLParser.is_lookup_page(html):
+                links = WOLParser.extract_lookup_links(html)
+
+                # If no links, try cleaned query
+                if not links:
+                    query_limpa = WOLParser.clean_query(query)
+                    if query_limpa != query:
+                        logger.info(f"Retrying with cleaned query: {base_url} (query={query_limpa})")
+                        response = await client.get(base_url, params={"q": query_limpa})
+                        response.raise_for_status()
+                        html = response.text
+                        final_url = str(response.url)
+                        links = WOLParser.extract_lookup_links(html)
+
+                if not links:
+                    raise ContentRetrievalError(
+                        f"WOL search returned no results for: {query}"
+                    )
+
+                # Follow first relevant link
+                article_path = links[0]["url"]
+                final_url = f"https://wol.jw.org{article_path}"
+                logger.info(f"Following lookup link: {final_url}")
+                response = await client.get(final_url)
+                response.raise_for_status()
+                html = response.text
+
+            # Step 3: Extract and locate paragraphs
+            all_paragraphs = WOLParser.parse_paragraphs(html)
+            if not all_paragraphs:
+                raise ContentRetrievalError(f"No paragraphs found in article: {final_url}")
+
+            requested_paragraphs = WOLParser.locate_paragraphs(
+                all_paragraphs, start_paragraph, end_paragraph
+            )
+            pages = WOLParser.extract_page_markers(html)
+
+            content = WOLReferenceResponse(
+                query=query,
+                paragraphs=requested_paragraphs,
+                total_paragraphs_in_article=len(all_paragraphs),
+                pages=pages,
+                source_url=final_url,
+            )
+
+            metadata = ResponseMetadata(
+                source_domain="wol.jw.org",
+                source_url=final_url,
+                timestamp=datetime.now(UTC),
+                query_params={
+                    "query": query,
+                    "start": start_paragraph,
+                    "end": end_paragraph,
+                    "language": lang_code,
+                },
+                cache_hit=False,
+            )
+
+            # Cache result
+            if settings.enable_cache:
+                self._cache.set(cache_key, value=(content, metadata))
+
+            return content, metadata
+
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching WOL reference: {e}")
+            raise ContentRetrievalError(f"Failed to fetch WOL reference: {e}") from e
+        except Exception as e:
+            logger.error(f"Unexpected error fetching WOL reference: {e}")
+            raise ContentRetrievalError(
+                f"Unexpected error fetching WOL reference: {e}"
+            ) from e
 
     async def get_scripture(
         self, reference: str, translation: str = "nwtsty", language: str | None = None
