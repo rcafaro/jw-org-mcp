@@ -403,6 +403,33 @@ class JWOrgClient:
             logger.error(f"Unexpected error fetching video captions: {e}")
             raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
 
+    async def _get_with_manual_307_handling(
+        self, client: httpx.AsyncClient, url: str, params: dict[str, Any] | None = None, max_redirects: int = 3
+    ) -> httpx.Response:
+        """Execute a GET request and manually follow 307 redirects.
+
+        Args:
+            client: The HTTP client
+            url: The URL to fetch
+            params: Optional query parameters
+            max_redirects: Maximum number of 307 redirects to follow
+
+        Returns:
+            The final HTTP response
+        """
+        response = await client.get(url, params=params)
+
+        redirect_count = 0
+        while response.status_code == 307 and "Location" in response.headers and redirect_count < max_redirects:
+            location = response.headers["Location"]
+            # Handle relative URLs by joining with the current response URL
+            redirect_url = str(response.url.join(location))
+            logger.info(f"Handling manual 307 redirect ({redirect_count + 1}) to: {redirect_url}")
+            response = await client.get(redirect_url)
+            redirect_count += 1
+
+        return response
+
     async def get_wol_reference(
         self,
         query: str,
@@ -482,7 +509,10 @@ class JWOrgClient:
 
                 logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
                 client = await self._get_http_client()
-                response = await client.get(base_url, params={"q": search_query})
+                response = await self._get_with_manual_307_handling(
+                    client, base_url, params={"q": search_query}
+                )
+
                 response.raise_for_status()
 
                 html = response.text
@@ -509,10 +539,11 @@ class JWOrgClient:
                     for path in article_paths:
                         f_url = f"https://wol.jw.org{path}"
                         logger.info(f"Following lookup link: {f_url}")
-                        resp = await client.get(f_url)
+                        resp = await self._get_with_manual_307_handling(client, f_url)
+
                         resp.raise_for_status()
                         sub_all_paragraphs.extend(WOLParser.parse_paragraphs(resp.text))
-                        final_source_urls.append(f_url)
+                        final_source_urls.append(str(resp.url))
                         all_pages_found.update(WOLParser.extract_page_markers(resp.text))
 
                     requested_paragraphs = WOLParser.locate_paragraphs(
