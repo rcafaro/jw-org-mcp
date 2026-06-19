@@ -363,28 +363,43 @@ class WOLParser:
         # --- Format A: bodyTxt ---
         body_div = soup.find("div", class_="bodyTxt")
         if body_div:
-            p_tags = body_div.find_all("p")
-            for p in p_tags:
-                text = p.get_text(separator=" ", strip=True)
-                if not text:
+            # We need to find page markers even in bodyTxt if they exist
+            # though they are usually in Format B.
+            current_page = None
+
+            # Use find_all with a list of tags to preserve order
+            elements = body_div.find_all(["p", "span"])
+            for elem in elements:
+                if elem.name == "span" and "pageNum" in elem.get("class", []):
+                    try:
+                        current_page = int(elem.get("id", "").replace("page", ""))
+                    except (ValueError, TypeError):
+                        pass
                     continue
 
-                # Detect if it's a study question (e.g., "1, 2.", "14, 15.")
-                is_question = bool(re.match(r"^\d+,\s*\d+", text))
+                if elem.name == "p":
+                    text = elem.get_text(separator=" ", strip=True)
+                    if not text:
+                        continue
 
-                # Extract first number
-                m = re.match(r"^(\d+)[,.\s)]", text)
-                num = int(m.group(1)) if m else None
+                    # Detect if it's a study question (e.g., "1, 2.", "14, 15.")
+                    # Heuristic: starts with "X, Y." or "X-Y."
+                    is_question = bool(re.match(r"^\d+[,–-]\s*\d+", text))
 
-                paragraphs.append(
-                    WOLParagraph(
-                        number=num,
-                        text=text,
-                        is_question=is_question,
-                        is_body=not is_question,
-                        source="bodyTxt",
+                    # Extract first number
+                    m = re.match(r"^(\d+)[,.\s)]", text)
+                    num = int(m.group(1)) if m else None
+
+                    paragraphs.append(
+                        WOLParagraph(
+                            number=num,
+                            text=text,
+                            is_question=is_question,
+                            is_body=not is_question,
+                            page=current_page,
+                            source="bodyTxt",
+                        )
                     )
-                )
             return paragraphs
 
         # --- Format B: Direct in article ---
@@ -392,82 +407,152 @@ class WOLParser:
         if not article:
             return paragraphs
 
-        p_tags = article.find_all("p")
-        for p in p_tags:
-            text = p.get_text(separator=" ", strip=True)
-            if not text:
-                continue
+        current_page = None
+        # Use find_all with a list of tags to preserve order
+        # Also need to check inside paragraphs because markers can be nested
+        elements = article.find_all(["p", "span"], recursive=True)
 
-            # Check for parNum span
-            par_num_span = p.find("span", class_="parNum")
-            num = None
-            if par_num_span and par_num_span.has_attr("data-pnum"):
+        # Track spans we've already processed if they were nested
+        processed_spans = set()
+
+        for elem in elements:
+            if elem.name == "span" and "pageNum" in elem.get("class", []):
+                if elem in processed_spans:
+                    continue
                 try:
-                    num = int(par_num_span["data-pnum"])
+                    current_page = int(elem.get("id", "").replace("page", ""))
                 except (ValueError, TypeError):
                     pass
+                continue
 
-            # If no parNum, try start of text
-            if num is None:
-                m = re.match(r"^(\d+)[,.\s)]", text)
-                num = int(m.group(1)) if m else None
+            if elem.name == "p":
+                # Check for page markers inside the paragraph BEFORE processing text
+                inner_spans = elem.find_all("span", class_="pageNum")
+                for span in inner_spans:
+                    try:
+                        current_page = int(span.get("id", "").replace("page", ""))
+                    except (ValueError, TypeError):
+                        pass
+                    processed_spans.add(span)
+                text = elem.get_text(separator=" ", strip=True)
+                if not text:
+                    continue
 
-            # Detect classes
-            p_classes = p.get("class", [])
-            if isinstance(p_classes, str):
-                p_classes = [p_classes]
+                # Check for parNum span
+                par_num_span = elem.find("span", class_="parNum")
+                num = None
+                if par_num_span and par_num_span.has_attr("data-pnum"):
+                    try:
+                        num = int(par_num_span["data-pnum"])
+                    except (ValueError, TypeError):
+                        pass
 
-            is_question = "qu" in p_classes or bool(re.match(r"^\d+,\s*\d+", text))
-            is_body = "sb" in p_classes
+                # If no parNum, try start of text
+                if num is None:
+                    m = re.match(r"^(\d+)[,.\s)]", text)
+                    num = int(m.group(1)) if m else None
 
-            if num is not None or is_body or is_question:
-                paragraphs.append(
-                    WOLParagraph(
-                        number=num,
-                        text=text,
-                        is_question=is_question,
-                        is_body=is_body,
-                        source="direto",
+                # Detect classes
+                p_classes = elem.get("class", [])
+                if isinstance(p_classes, str):
+                    p_classes = [p_classes]
+
+                is_question = "qu" in p_classes or bool(re.match(r"^\d+[,–-]\s*\d+", text))
+                is_body = "sb" in p_classes
+
+                if num is not None or is_body or is_question:
+                    paragraphs.append(
+                        WOLParagraph(
+                            number=num,
+                            text=text,
+                            is_question=is_question,
+                            is_body=is_body,
+                            page=current_page,
+                            source="direto",
+                        )
                     )
-                )
 
         return paragraphs
 
     @staticmethod
     def locate_paragraphs(
-        paragraphs: list[WOLParagraph], start_num: int, end_num: int | None = None
+        paragraphs: list[WOLParagraph],
+        start_num: int | None = None,
+        end_num: int | None = None,
+        start_page: int | None = None,
+        end_page: int | None = None,
     ) -> list[WOLParagraph]:
-        """Locate specific paragraphs by number or position."""
+        """Locate specific paragraphs by number/position and/or page range."""
+
+        # If we have pages but no paragraph numbers, return all paragraphs on those pages
+        if start_page is not None and start_num is None:
+            if end_page is None:
+                end_page = start_page
+
+            results = [
+                p for p in paragraphs
+                if p.page is not None and start_page <= p.page <= end_page
+            ]
+
+            # Special case for "it book" entries that might start on a page
+            # and span multiple pages, but we only want the entry.
+            # If no paragraphs were found with explicit page numbers,
+            # we return everything if it's a small article,
+            # but usually WOL pages have markers.
+            if results:
+                return results
+
+            # If no page markers found but we have pages requested,
+            # maybe they are all on the same page (no markers).
+            # Return everything.
+            return paragraphs
+
+        # Traditional paragraph locating
+        if start_num is None:
+            return []
+
         if end_num is None:
             end_num = start_num
+
+        # Filter paragraphs by page range if provided
+        work_set = paragraphs
+        if start_page is not None:
+            if end_page is None:
+                end_page = start_page
+            # Find the first page marker to know the starting page if it's not explicitly set for early paragraphs
+            first_marker_page = next((p.page for p in paragraphs if p.page is not None), None)
+
+            work_set = [
+                p for p in paragraphs
+                if (p.page is not None and start_page <= p.page <= end_page)
+                or (p.page is None and first_marker_page is not None and start_page <= first_marker_page <= end_page)
+            ]
 
         results: list[WOLParagraph] = []
         for n in range(start_num, end_num + 1):
             encontrado = None
 
             # Method 1: Explicit paragraph number (skip questions)
-            # Preference: body text > question
-            matches = [p for p in paragraphs if p.number == n]
+            matches = [p for p in work_set if p.number == n]
             if matches:
-                # Prioritize body paragraphs, then non-questions
                 matches.sort(key=lambda x: (not x.is_body, x.is_question))
                 if not matches[0].is_question:
                     encontrado = matches[0]
 
-            # Method 2: Positional counting (skipping 1st if it's a continuation, and skipping questions)
+            # Method 2: Positional counting
             if not encontrado:
                 filtered = [
                     p
-                    for i, p in enumerate(paragraphs)
+                    for i, p in enumerate(work_set)
                     if not (i == 0 and p.number is None and not p.is_question)
                     and not p.is_question
                 ]
                 if 1 <= n <= len(filtered):
                     encontrado = filtered[n - 1]
 
-            # Method 3: Simple count of content paragraphs
+            # Method 3: Simple count
             if not encontrado:
-                no_questions = [p for p in paragraphs if not p.is_question]
+                no_questions = [p for p in work_set if not p.is_question]
                 if 1 <= n <= len(no_questions):
                     encontrado = no_questions[n - 1]
 

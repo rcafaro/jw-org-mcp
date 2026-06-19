@@ -79,6 +79,7 @@ class WOLParagraph(BaseModel):
     text: str
     is_question: bool = False
     is_body: bool = True
+    page: int | None = None
     source: str
 
 
