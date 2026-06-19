@@ -18,14 +18,22 @@ from .models import (
     ResponseMetadata,
     SearchResponse,
     VideoCaptions,
+    WOLReferenceResponse,
 )
-from .parser import ArticleParser, QueryParser, SearchResponseParser
+from .parser import ArticleParser, QueryParser, SearchResponseParser, WOLParser
 
 logger = logging.getLogger(__name__)
 
 
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
+
+    # Mapping from MCP language codes to WOL language and library codes
+    WOL_LANG_MAP = {
+        "E": {"code": "en", "lib": "lp-e"},
+        "T": {"code": "pt", "lib": "lp-t"},
+        "S": {"code": "es", "lib": "lp-s"},
+    }
 
     def __init__(self) -> None:
         """Initialize the client."""
@@ -343,6 +351,187 @@ class JWOrgClient:
         except Exception as e:
             logger.error(f"Unexpected error fetching video captions: {e}")
             raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
+
+    async def get_wol_reference(
+        self,
+        query: str,
+        start_paragraph: int | None = None,
+        end_paragraph: int | None = None,
+        language: str | None = None,
+    ) -> tuple[WOLReferenceResponse, ResponseMetadata]:
+        """Fetch specific paragraphs from publication reference(s) on WOL.
+
+        Supports semicolon-separated multiple references.
+        Supports page ranges (p. 18, pp. 17-18) and paragraph ranges (§ 5, §§ 4-6).
+
+        Args:
+            query: Publication reference(s) (e.g., "w13 15/10 p. 27", "it-2 pp. 1041-1043")
+            start_paragraph: Starting paragraph number (optional if provided in query)
+            end_paragraph: Ending paragraph number (optional if provided in query)
+            language: Language code (default: E for English)
+
+        Returns:
+            Tuple of (WOLReferenceResponse, ResponseMetadata)
+
+        Raises:
+            ContentRetrievalError: If content retrieval fails
+        """
+        lang_code = language or settings.default_language
+        wol_info = self.WOL_LANG_MAP.get(lang_code, self.WOL_LANG_MAP["E"])
+
+        # Support semicolon-separated queries
+        sub_queries = [q.strip() for q in query.split(";") if q.strip()]
+
+        all_combined_paragraphs = []
+        final_source_urls = []
+        all_pages_found = set()
+
+        for sub_query in sub_queries:
+            # Parse sub_query for page and paragraph ranges
+            # Examples:
+            # w23.08 p. 18
+            # it-2 pp. 1041-1043
+            # it-2 p. 1044 §§ 3-4
+
+            s_page, e_page = None, None
+            # Match p. 123 or pp. 123-125
+            page_match = re.search(r'\bpp?\.?\s*(\d+)(?:\s*[-–]\s*(\d+))?', sub_query)
+            if page_match:
+                s_page = int(page_match.group(1))
+                if page_match.group(2):
+                    e_page = int(page_match.group(2))
+
+            s_para, e_para = start_paragraph, end_paragraph
+            # Match § 5 or §§ 4-6
+            para_match = re.search(r'§§?\s*(\d+)(?:\s*[-–]\s*(\d+))?', sub_query)
+            if para_match:
+                s_para = int(para_match.group(1))
+                if para_match.group(2):
+                    e_para = int(para_match.group(2))
+
+            # Check cache
+            cache_key = f"wol_ref:{sub_query}:{s_para}:{e_para}:{lang_code}"
+            if settings.enable_cache:
+                cached = self._cache.get(cache_key)
+                if cached is not None:
+                    logger.info(f"Cache hit for WOL reference: {sub_query}")
+                    content, metadata = cached
+                    all_combined_paragraphs.extend(content.paragraphs)
+                    final_source_urls.append(content.source_url)
+                    all_pages_found.update(content.pages)
+                    continue
+
+            try:
+                base_url = f"https://wol.jw.org/{wol_info['code']}/wol/l/r1/{wol_info['lib']}"
+
+                # Use cleaned query for search if it contains paragraph markers
+                search_query = sub_query
+                if para_match:
+                    search_query = WOLParser.clean_query(sub_query)
+
+                logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
+                client = await self._get_http_client()
+                response = await client.get(base_url, params={"q": search_query})
+                response.raise_for_status()
+
+                html = response.text
+                final_url = str(response.url)
+
+                # Handle lookup page
+                if WOLParser.is_lookup_page(html):
+                    links = WOLParser.extract_lookup_links(html)
+                    if not links:
+                        raise ContentRetrievalError(f"WOL search returned no results for: {sub_query}")
+
+                    # If it's a reference book (it book) and we have a page range,
+                    # we might need to follow multiple links if they fall within the range.
+                    # For now, let's follow the first one as a baseline,
+                    # but if we find "it-1" or "it-2" in query, we might want to be more inclusive.
+                    article_paths = [links[0]["url"]]
+
+                    # Heuristic for it-books: collect articles that might be relevant
+                    if "it-" in sub_query.lower() and len(links) > 1:
+                        # Follow up to top 3 if they seem relevant (too complex to perfectly match page ranges in link text)
+                        article_paths = [l["url"] for l in links[:3]]
+
+                    sub_all_paragraphs = []
+                    for path in article_paths:
+                        f_url = f"https://wol.jw.org{path}"
+                        logger.info(f"Following lookup link: {f_url}")
+                        resp = await client.get(f_url)
+                        resp.raise_for_status()
+                        sub_all_paragraphs.extend(WOLParser.parse_paragraphs(resp.text))
+                        final_source_urls.append(f_url)
+                        all_pages_found.update(WOLParser.extract_page_markers(resp.text))
+
+                    requested_paragraphs = WOLParser.locate_paragraphs(
+                        sub_all_paragraphs, s_para, e_para, s_page, e_page
+                    )
+                else:
+                    # Direct article
+                    all_paragraphs = WOLParser.parse_paragraphs(html)
+                    if not all_paragraphs:
+                        raise ContentRetrievalError(f"No paragraphs found in article: {final_url}")
+
+                    requested_paragraphs = WOLParser.locate_paragraphs(
+                        all_paragraphs, s_para, e_para, s_page, e_page
+                    )
+                    final_source_urls.append(final_url)
+                    all_pages_found.update(WOLParser.extract_page_markers(html))
+
+                all_combined_paragraphs.extend(requested_paragraphs)
+
+                # Cache individual sub-query result
+                if settings.enable_cache:
+                    individual_content = WOLReferenceResponse(
+                        query=sub_query,
+                        paragraphs=requested_paragraphs,
+                        total_paragraphs_in_article=len(requested_paragraphs), # Not perfectly accurate but works for cache
+                        pages=sorted(list(all_pages_found)),
+                        source_url=final_url,
+                    )
+                    self._cache.set(cache_key, value=(individual_content, ResponseMetadata(
+                        source_domain="wol.jw.org",
+                        source_url=final_url,
+                        timestamp=datetime.now(UTC),
+                        query_params={"query": sub_query},
+                        cache_hit=False,
+                    )))
+
+            except httpx.HTTPError as e:
+                logger.error(f"HTTP error fetching WOL reference '{sub_query}': {e}")
+                # Don't fail the whole thing if one sub-query fails?
+                # For now, let's raise if it's the only one, or just log.
+                if len(sub_queries) == 1:
+                    raise ContentRetrievalError(f"Failed to fetch WOL reference: {e}") from e
+            except Exception as e:
+                logger.error(f"Unexpected error fetching WOL reference '{sub_query}': {e}")
+                if len(sub_queries) == 1:
+                    raise
+
+        if not all_combined_paragraphs:
+            raise ContentRetrievalError(f"No paragraphs found for query: {query}")
+
+        content = WOLReferenceResponse(
+            query=query,
+            paragraphs=all_combined_paragraphs,
+            total_paragraphs_in_article=len(all_combined_paragraphs),
+            pages=sorted(list(all_pages_found)),
+            source_url="; ".join(list(set(final_source_urls))),
+        )
+
+        metadata = ResponseMetadata(
+            source_domain="wol.jw.org",
+            source_url=final_source_urls[0] if final_source_urls else "",
+            timestamp=datetime.now(UTC),
+            query_params={
+                "query": query,
+                "language": lang_code,
+            },
+            cache_hit=False,
+        )
+
+        return content, metadata
 
     async def get_scripture(
         self, reference: str, translation: str = "nwtsty", language: str | None = None
