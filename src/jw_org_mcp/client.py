@@ -41,6 +41,60 @@ class JWOrgClient:
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
 
+    async def _get_wol_base_url(self, wol_code: str) -> str:
+        """Dynamically discover the WOL base URL for a language.
+
+        Args:
+            wol_code: WOL language code (e.g., 'en', 'pt', 'es')
+
+        Returns:
+            The discovered base URL
+        """
+        cache_key = f"wol_base_url:{wol_code}"
+        if settings.enable_cache:
+            cached = self._cache.get(cache_key)
+            if cached:
+                return cached
+
+        try:
+            # Navigate to wol.jw.org/{wol_code} to see where it redirects
+            discovery_url = f"https://wol.jw.org/{wol_code}"
+            logger.info(f"Discovering WOL base URL via: {discovery_url}")
+
+            client = await self._get_http_client()
+            # client follows redirects by default in _get_http_client
+            response = await client.get(discovery_url)
+            response.raise_for_status()
+
+            html = response.text
+            # Look for the search form action to find the current path pattern
+            # <form ... action="/pt/wol/qt/r5/lp-t">
+            match = re.search(r'action="(/[^/]+/wol/([^/]+)/[^/]+/[^/"]+)"', html)
+            if match:
+                # We want the 'lookup' variant which is usually /wol/l/
+                # but we'll try to find any existing /wol/l/ or /wol/s/ link first
+                # or just use the qt path and hope it redirects to l or s correctly.
+                # Investigation showed /wol/qt/ redirects to /wol/l/ or /wol/s/ when q is provided.
+                # To be most compatible with existing code that appends params to base_url,
+                # we'll build the /wol/l/ variant.
+                base_path = match.group(1)
+                qt_segment = match.group(2)
+                base_url = f"https://wol.jw.org{base_path.replace(f'/wol/{qt_segment}/', '/wol/l/')}"
+            else:
+                # Fallback to simple replacement if form not found
+                base_url = str(response.url).replace("/wol/h/", "/wol/l/")
+
+            if settings.enable_cache:
+                self._cache.set(cache_key, value=base_url)
+
+            return base_url
+
+        except Exception as e:
+            logger.warning(f"Failed to discover dynamic WOL base URL for {wol_code}: {e}")
+            raise ContentRetrievalError(
+                f"Failed to discover WOL base URL for {wol_code}: {e}"
+            ) from e
+
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
         if self._http_client is None:
@@ -422,7 +476,7 @@ class JWOrgClient:
                     continue
 
             try:
-                base_url = f"https://wol.jw.org/{wol_info['code']}/wol/l/r1/{wol_info['lib']}"
+                base_url = await self._get_wol_base_url(wol_info["code"])
 
                 # Use cleaned query for search if it contains paragraph markers
                 search_query = sub_query
