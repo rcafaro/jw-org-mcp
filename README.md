@@ -94,7 +94,7 @@ To use this MCP server with Claude Desktop, add it to your Claude configuration 
 After saving the configuration:
 1. Restart Claude Desktop
 2. The JW.Org MCP tools will be available in your conversations
-3. Look for tools like `search_content`, `get_article`, and `get_scripture`
+3. Look for tools like `search_content`, `get_article`, `get_jw_captions`, and `get_scripture`
 
 ### Configuration
 
@@ -153,6 +153,22 @@ When given a publication-level URL (e.g., a magazine issue), the tool returns a 
 ```json
 {
   "url": "https://wol.jw.org/en/wol/d/r1/lp-e/1985720"
+}
+```
+
+### get_jw_captions
+
+Fetch video captions and metadata by video ID or any JW.org URL. Returns the video title, thumbnail URL, and subtitles.
+
+**Parameters:**
+- `video_id` (required): Video ID or JW.Org URL
+- `language` (optional): Language code - `E` for English, `S` for Spanish, etc. (default: `E`)
+
+**Example:**
+```json
+{
+  "video_id": "pub-jwbvod25_17_VIDEO",
+  "language": "E"
 }
 ```
 

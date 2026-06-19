@@ -63,6 +63,15 @@ class ScriptureContent(BaseModel):
     source_url: str
 
 
+class VideoCaptions(BaseModel):
+    """Video captions and metadata."""
+
+    title: str
+    thumbnail: str
+    subtitles: str
+    source_url: str
+
+
 class ResponseMetadata(BaseModel):
     """Metadata for all responses."""
 

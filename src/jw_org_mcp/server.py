@@ -71,6 +71,28 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="get_jw_captions",
+            description=(
+                "Fetch video captions and metadata by video ID or any JW.org URL. "
+                "Returns the video title, thumbnail URL, and subtitles."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "video_id": {
+                        "type": "string",
+                        "description": "Video ID or JW.Org URL",
+                    },
+                    "language": {
+                        "type": "string",
+                        "description": "Language code (E=English, P=Portuguese, S=Spanish, etc)",
+                        "default": settings.default_language,
+                    },
+                },
+                "required": ["video_id"],
+            },
+        ),
+        Tool(
             name="get_article",
             description=(
                 "Retrieve full article content from a JW.Org URL. "
@@ -135,6 +157,8 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             return await _handle_get_article(arguments)
         elif name == "get_scripture":
             return await _handle_get_scripture(arguments)
+        elif name == "get_jw_captions":
+            return await _handle_get_jw_captions(arguments)
         elif name == "get_cache_stats":
             return await _handle_cache_stats()
         else:
@@ -260,6 +284,28 @@ async def _handle_get_scripture(arguments: dict[str, Any]) -> list[TextContent]:
     result_text += f"{scripture['text']}\n\n"
     result_text += f"**Source:** {metadata.source_url}\n"
     result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
+
+    return [TextContent(type="text", text=result_text)]
+
+
+async def _handle_get_jw_captions(arguments: dict[str, Any]) -> list[TextContent]:
+    """Handle get_jw_captions tool call."""
+    video_id = arguments.get("video_id", "")
+    language = arguments.get("language")
+
+    logger.info(f"Fetching video captions: {video_id} (lang={language or settings.default_language})")
+
+    captions, metadata = await client.get_video_captions(video_id, language)
+
+    # Format captions response
+    result_text = f"# {captions.title}\n\n"
+    if captions.thumbnail:
+        result_text += f"![Thumbnail]({captions.thumbnail})\n\n"
+    result_text += f"**Source:** {metadata.source_url}\n"
+    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
+    result_text += f"**Cached:** {metadata.cache_hit}\n\n"
+    result_text += "## Subtitles\n\n"
+    result_text += f"{captions.subtitles}\n"
 
     return [TextContent(type="text", text=result_text)]
 
