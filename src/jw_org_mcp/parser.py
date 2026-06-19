@@ -484,6 +484,10 @@ class WOLParser:
     ) -> list[WOLParagraph]:
         """Locate specific paragraphs by number/position and/or page range."""
 
+        # If no specific paragraph or page requested, return all
+        if start_num is None and start_page is None:
+            return paragraphs
+
         # If we have pages but no paragraph numbers, return all paragraphs on those pages
         if start_page is not None and start_num is None:
             if end_page is None:
