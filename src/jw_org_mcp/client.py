@@ -28,6 +28,9 @@ logger = logging.getLogger(__name__)
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
 
+    # Debug flag to enable paragraph filtering
+    ENABLE_PARAGRAPH_FILTERING = False
+
     # Mapping from MCP language codes to WOL language and library codes
     WOL_LANG_MAP = {
         "E": {"code": "en", "lib": "lp-e"},
@@ -40,6 +43,7 @@ class JWOrgClient:
         self._auth_manager = AuthManager()
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
+        self._wol_base_urls: dict[str, str] = {}
 
     async def _get_wol_base_url(self, wol_code: str) -> str:
         """Dynamically discover the WOL base URL for a language.
@@ -50,6 +54,9 @@ class JWOrgClient:
         Returns:
             The discovered base URL
         """
+        if wol_code in self._wol_base_urls:
+            return self._wol_base_urls[wol_code]
+
         try:
             # Navigate to wol.jw.org/{wol_code} to see where it redirects
             discovery_url = f"https://wol.jw.org/{wol_code}"
@@ -106,6 +113,7 @@ class JWOrgClient:
                 if base_url.endswith("/"):
                     base_url = base_url.rstrip("/")
 
+            self._wol_base_urls[wol_code] = base_url
             return base_url
 
         except Exception as e:
@@ -508,20 +516,8 @@ class JWOrgClient:
                 if para_match.group(2):
                     e_para = int(para_match.group(2))
 
-            # Clean query for more consistent caching
+            # Clean query
             cleaned_query = WOLParser.clean_query(sub_query)
-
-            # Check cache
-            cache_key = f"wol_ref:{cleaned_query}:{s_para}:{e_para}:{lang_code}"
-            if settings.enable_cache:
-                cached = self._cache.get(cache_key)
-                if cached is not None:
-                    logger.info(f"Cache hit for WOL reference: {cleaned_query} (original: {sub_query})")
-                    content, metadata = cached
-                    all_combined_paragraphs.extend(content.paragraphs)
-                    final_source_urls.append(content.source_url)
-                    all_pages_found.update(content.pages)
-                    continue
 
             try:
                 base_url = await self._get_wol_base_url(wol_info["code"])
@@ -598,39 +594,28 @@ class JWOrgClient:
                         final_source_urls.append(str(resp.url))
                         all_pages_found.update(WOLParser.extract_page_markers(resp.text))
 
-                    requested_paragraphs = WOLParser.locate_paragraphs(
-                        sub_all_paragraphs, s_para, e_para, s_page, e_page
-                    )
+                    if self.ENABLE_PARAGRAPH_FILTERING:
+                        requested_paragraphs = WOLParser.locate_paragraphs(
+                            sub_all_paragraphs, s_para, e_para, s_page, e_page
+                        )
+                    else:
+                        requested_paragraphs = sub_all_paragraphs
                 else:
                     # Direct article
                     all_paragraphs = WOLParser.parse_paragraphs(html)
                     if not all_paragraphs:
                         raise ContentRetrievalError(f"No paragraphs found in article: {final_url}")
 
-                    requested_paragraphs = WOLParser.locate_paragraphs(
-                        all_paragraphs, s_para, e_para, s_page, e_page
-                    )
+                    if self.ENABLE_PARAGRAPH_FILTERING:
+                        requested_paragraphs = WOLParser.locate_paragraphs(
+                            all_paragraphs, s_para, e_para, s_page, e_page
+                        )
+                    else:
+                        requested_paragraphs = all_paragraphs
                     final_source_urls.append(final_url)
                     all_pages_found.update(WOLParser.extract_page_markers(html))
 
                 all_combined_paragraphs.extend(requested_paragraphs)
-
-                # Cache individual sub-query result
-                if settings.enable_cache:
-                    individual_content = WOLReferenceResponse(
-                        query=sub_query,
-                        paragraphs=requested_paragraphs,
-                        total_paragraphs_in_article=len(requested_paragraphs), # Not perfectly accurate but works for cache
-                        pages=sorted(list(all_pages_found)),
-                        source_url=final_url,
-                    )
-                    self._cache.set(cache_key, value=(individual_content, ResponseMetadata(
-                        source_domain="wol.jw.org",
-                        source_url=final_url,
-                        timestamp=datetime.now(UTC),
-                        query_params={"query": sub_query},
-                        cache_hit=False,
-                    )))
 
             except httpx.HTTPError as e:
                 logger.error(f"HTTP error fetching WOL reference '{sub_query}': {e}")
