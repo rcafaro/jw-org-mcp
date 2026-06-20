@@ -74,6 +74,29 @@ def test_locate_paragraphs_whole_page():
     assert res[0].is_header is True
     assert res[1].number == 1
 
+def test_locate_paragraphs_whole_page():
+    paragraphs = [
+        WOLParagraph(number=None, text="Title", is_header=True, page=10, source="test"),
+        WOLParagraph(number=1, text="Para 1", page=10, source="test"),
+        WOLParagraph(number=2, text="Para 2", page=11, source="test"),
+    ]
+    # Page 10 only
+    res = WOLParser.locate_paragraphs(paragraphs, start_page=10)
+    assert len(res) == 2
+    assert res[0].is_header is True
+    assert res[1].number == 1
+
+def test_locate_paragraphs_header_before_marker():
+    paragraphs = [
+        WOLParagraph(text="Initial Header", is_header=True, page=None, source="test"),
+        WOLParagraph(text="Para 1", page=10, source="test"),
+    ]
+    # Header has no page, but is followed by page 10.
+    # If we request page 10, it should be included.
+    res = WOLParser.locate_paragraphs(paragraphs, start_page=10)
+    assert len(res) == 2
+    assert res[0].text == "Initial Header"
+
 def test_parse_paragraphs_bodytxt():
     html = """
     <div class="bodyTxt">

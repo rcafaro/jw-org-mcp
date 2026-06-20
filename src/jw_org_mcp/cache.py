@@ -68,21 +68,22 @@ class Cache:
         """
         key = self._make_key(*args)
         entry = self._cache.get(key)
+        key_summary = str(args[0]) if args else "unknown"
 
         if entry is None:
             self._misses += 1
-            logger.debug(f"Cache miss: {key}")
+            logger.info(f"CACHE MISS: [{key_summary}] (key: {key[:8]}...)")
             return None
 
         if entry.is_expired():
             # Remove expired entry
             del self._cache[key]
             self._misses += 1
-            logger.debug(f"Cache expired: {key}")
+            logger.info(f"CACHE EXPIRED: [{key_summary}] (key: {key[:8]}...)")
             return None
 
         self._hits += 1
-        logger.debug(f"Cache hit: {key}")
+        logger.info(f"CACHE HIT: [{key_summary}] (key: {key[:8]}...)")
         return entry.data
 
     def set(self, *args: Any, value: Any, ttl_seconds: int | None = None) -> None:
@@ -95,9 +96,10 @@ class Cache:
         """
         key = self._make_key(*args)
         ttl = ttl_seconds if ttl_seconds is not None else self._ttl_seconds
+        key_summary = str(args[0]) if args else "unknown"
 
         self._cache[key] = CacheEntry(value, ttl)
-        logger.debug(f"Cache set: {key} (TTL: {ttl}s)")
+        logger.info(f"CACHE SET: [{key_summary}] (key: {key[:8]}...) TTL: {ttl}s")
 
     def remove(self, *args: Any) -> None:
         """Remove entry from cache.
