@@ -9,7 +9,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from .auth import AuthManager
-from .cache import Cache
 from .config import settings
 from .exceptions import ContentRetrievalError, SearchError
 from .models import (
@@ -32,12 +31,11 @@ class JWOrgClient:
     ENABLE_PARAGRAPH_FILTERING = False
 
     # Debug flag to log final response content
-    LOG_RESPONSE_CONTENT = False
+    LOG_RESPONSE_CONTENT = True
 
     def __init__(self) -> None:
         """Initialize the client."""
         self._auth_manager = AuthManager()
-        self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
 
     async def _get_http_client(self) -> httpx.AsyncClient:
@@ -81,16 +79,6 @@ class JWOrgClient:
 
         # Parse query to extract meaningful search terms
         search_terms = QueryParser.extract_search_terms(query)
-
-        # Check cache
-        cache_key_parts = (search_terms, filter_type, lang, offset)
-        if settings.enable_cache:
-            cached = self._cache.get(*cache_key_parts)
-            if cached is not None:
-                logger.info(f"Cache hit for search: {search_terms}")
-                response, metadata = cached
-                metadata.cache_hit = True
-                return response, metadata
 
         try:
             # Get CDN and auth
@@ -147,10 +135,6 @@ class JWOrgClient:
                 cache_hit=False,
             )
 
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(*cache_key_parts, value=(search_response, metadata))
-
             return search_response, metadata
 
         except httpx.HTTPError as e:
@@ -178,19 +162,6 @@ class JWOrgClient:
         Raises:
             ContentRetrievalError: If content retrieval fails
         """
-        # Normalize URL for caching
-        parsed = urlparse(url)
-        normalized_url = parsed._replace(query="", fragment="").geturl()
-
-        # Check cache
-        if settings.enable_cache:
-            cached = self._cache.get(normalized_url, "article")
-            if cached is not None:
-                logger.info(f"Cache hit for article: {normalized_url}")
-                content, metadata = cached
-                metadata.cache_hit = True
-                return content, metadata
-
         try:
             logger.info(f"Fetching article: {url}")
 
@@ -208,10 +179,6 @@ class JWOrgClient:
                 query_params={"url": url},
                 cache_hit=False,
             )
-
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(normalized_url, "article", value=(article, metadata))
 
             return article, metadata
 
@@ -282,16 +249,6 @@ class JWOrgClient:
         lang = language or settings.default_language
         extracted_id = self._extract_video_id(video_id)
 
-        # Check cache
-        cache_key = f"captions:{extracted_id}:{lang}"
-        if settings.enable_cache:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                logger.info(f"Cache hit for video captions: {extracted_id}")
-                content, metadata = cached
-                metadata.cache_hit = True
-                return content, metadata
-
         try:
             # Step 1: Get media metadata from CDN
             cdn_info = await self._auth_manager.discover_cdn()
@@ -341,10 +298,6 @@ class JWOrgClient:
                 query_params={"video_id": video_id, "language": lang},
                 cache_hit=False,
             )
-
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(cache_key, value=(captions, metadata))
 
             return captions, metadata
 
@@ -601,18 +554,6 @@ class JWOrgClient:
         )
 
         return scripture_data, metadata
-
-    def get_cache_stats(self) -> dict[str, Any]:
-        """Get cache statistics.
-
-        Returns:
-            Cache statistics
-        """
-        return self._cache.get_stats()
-
-    def clear_cache(self) -> None:
-        """Clear the cache."""
-        self._cache.clear()
 
     async def close(self) -> None:
         """Close all connections."""

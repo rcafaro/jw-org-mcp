@@ -14,10 +14,6 @@ class Settings(BaseSettings):
     wol_base_url: str = "https://wol.jw.org"
     cdn_base_url: str = "https://b.jw-cdn.org"
 
-    # Cache settings
-    cache_ttl_seconds: int = 900  # 15 minutes
-    enable_cache: bool = True
-
     # Request settings
     request_timeout: int = 30
     max_retries: int = 3
@@ -28,7 +24,7 @@ class Settings(BaseSettings):
     connection_pool_size: int = 100
 
     # Default search settings
-    default_language: str = "T"
+    default_language: str = "E"
     default_search_limit: int = 10
     default_search_filter: str = "all"
 

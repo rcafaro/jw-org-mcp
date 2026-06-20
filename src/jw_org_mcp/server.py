@@ -167,14 +167,6 @@ async def list_tools() -> list[Tool]:
                 "required": ["reference"],
             },
         ),
-        Tool(
-            name="get_cache_stats",
-            description="Get cache statistics including hit rate and entry count.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-            },
-        ),
     ]
 
 
@@ -192,8 +184,6 @@ async def call_tool(name: str, arguments: Any) -> list[TextContent]:
             return await _handle_get_scripture(arguments)
         elif name == "get_jw_captions":
             return await _handle_get_jw_captions(arguments)
-        elif name == "get_cache_stats":
-            return await _handle_cache_stats()
         else:
             return [
                 TextContent(
@@ -243,8 +233,7 @@ async def _handle_search(arguments: dict[str, Any]) -> list[TextContent]:
     result_text += f"**Total Results:** {response.total}\n"
     result_text += f"**Filter:** {response.filter}\n"
     result_text += f"**Source:** {metadata.source_url}\n"
-    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
-    result_text += f"**Cached:** {metadata.cache_hit}\n\n"
+    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n\n"
 
     if not response.results:
         result_text += "No results found.\n"
@@ -284,7 +273,6 @@ async def _handle_get_wol_reference(arguments: dict[str, Any]) -> list[TextConte
     result_text = f"# Reference: {content.query}\n\n"
     result_text += f"**Source:** {metadata.source_url}\n"
     result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
-    result_text += f"**Cached:** {metadata.cache_hit}\n"
     if content.pages:
         result_text += f"**Pages:** {content.pages[0]}–{content.pages[-1]}\n"
     result_text += f"**Total paragraphs in article:** {content.total_paragraphs_in_article}\n\n"
@@ -330,8 +318,7 @@ async def _handle_get_article(arguments: dict[str, Any]) -> list[TextContent]:
         # Format article
         result_text = f"# {content.title}\n\n"
         result_text += f"**Source:** {metadata.source_url}\n"
-        result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
-        result_text += f"**Cached:** {metadata.cache_hit}\n\n"
+        result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n\n"
 
         result_text += "## Content\n\n"
         for para in content.paragraphs:
@@ -378,25 +365,13 @@ async def _handle_get_jw_captions(arguments: dict[str, Any]) -> list[TextContent
     if captions.thumbnail:
         result_text += f"![Thumbnail]({captions.thumbnail})\n\n"
     result_text += f"**Source:** {metadata.source_url}\n"
-    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n"
-    result_text += f"**Cached:** {metadata.cache_hit}\n\n"
+    result_text += f"**Timestamp:** {metadata.timestamp.isoformat()}\n\n"
     result_text += "## Subtitles\n\n"
     result_text += f"{captions.subtitles}\n"
 
     return [TextContent(type="text", text=result_text)]
 
 
-async def _handle_cache_stats() -> list[TextContent]:
-    """Handle get_cache_stats tool call."""
-    stats = client.get_cache_stats()
-
-    result_text = "# Cache Statistics\n\n"
-    result_text += f"**Entries:** {stats['entries']}\n"
-    result_text += f"**Hits:** {stats['hits']}\n"
-    result_text += f"**Misses:** {stats['misses']}\n"
-    result_text += f"**Hit Rate:** {stats['hit_rate']}%\n"
-
-    return [TextContent(type="text", text=result_text)]
 
 
 async def cleanup() -> None:
