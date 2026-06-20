@@ -31,6 +31,9 @@ class JWOrgClient:
     # Debug flag to enable paragraph filtering
     ENABLE_PARAGRAPH_FILTERING = False
 
+    # Debug flag to log final response content
+    LOG_RESPONSE_CONTENT = True
+
     # Mapping from MCP language codes to WOL language and library codes
     WOL_LANG_MAP = {
         "E": {"code": "en", "lib": "lp-e"},
@@ -516,14 +519,11 @@ class JWOrgClient:
                 if para_match.group(2):
                     e_para = int(para_match.group(2))
 
-            # Clean query
-            cleaned_query = WOLParser.clean_query(sub_query)
-
             try:
                 base_url = await self._get_wol_base_url(wol_info["code"])
 
-                # Use cleaned query for search
-                search_query = cleaned_query
+                # Use ORIGINAL sub_query for search to let WOL handle filtering
+                search_query = sub_query
 
                 logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
                 client = await self._get_http_client()
@@ -536,6 +536,10 @@ class JWOrgClient:
 
                 if response.status_code == 404:
                     logger.warning(f"404 received for base_url {base_url}. Redetecting...")
+                    # Invalidate session cache for this language before retrying discovery
+                    if wol_info["code"] in self._wol_base_urls:
+                        del self._wol_base_urls[wol_info["code"]]
+
                     base_url = await self._get_wol_base_url(wol_info["code"])
                     logger.info(f"Retrying with new base_url: {base_url}")
                     response = await self._get_with_manual_redirect_handling(
@@ -549,6 +553,7 @@ class JWOrgClient:
 
                 html = response.text
                 final_url = str(response.url)
+                logger.info(f"Final resolved URL for '{search_query}': {final_url}")
 
                 # Check for direct article content even on lookup page
                 direct_paragraphs = WOLParser.parse_paragraphs(html)
@@ -638,6 +643,10 @@ class JWOrgClient:
             pages=sorted(list(all_pages_found)),
             source_url="; ".join(list(set(final_source_urls))),
         )
+
+        if self.LOG_RESPONSE_CONTENT:
+            combined_text = "\n\n".join([p.text for p in all_combined_paragraphs])
+            logger.info(f"Combined response content for '{query}':\n{combined_text}")
 
         metadata = ResponseMetadata(
             source_domain="wol.jw.org",
