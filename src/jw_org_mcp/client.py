@@ -34,96 +34,11 @@ class JWOrgClient:
     # Debug flag to log final response content
     LOG_RESPONSE_CONTENT = True
 
-    # Mapping from MCP language codes to WOL language and library codes
-    WOL_LANG_MAP = {
-        "E": {"code": "en", "lib": "lp-e"},
-        "T": {"code": "pt", "lib": "lp-t"},
-        "S": {"code": "es", "lib": "lp-s"},
-    }
-
     def __init__(self) -> None:
         """Initialize the client."""
         self._auth_manager = AuthManager()
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
-        self._wol_base_urls: dict[str, str] = {}
-
-    async def _get_wol_base_url(self, wol_code: str) -> str:
-        """Dynamically discover the WOL base URL for a language.
-
-        Args:
-            wol_code: WOL language code (e.g., 'en', 'pt', 'es')
-
-        Returns:
-            The discovered base URL
-        """
-        if wol_code in self._wol_base_urls:
-            return self._wol_base_urls[wol_code]
-
-        try:
-            # Navigate to wol.jw.org/{wol_code} to see where it redirects
-            discovery_url = f"https://wol.jw.org/{wol_code}"
-            logger.info(f"Discovering WOL base URL via: {discovery_url}")
-
-            client = await self._get_http_client()
-            # client follows redirects by default in _get_http_client
-
-            # Efficiently discover: use streaming to only read enough for form action
-            # and follows redirects automatically
-            base_url = None
-            async with client.stream("GET", discovery_url) as response:
-                response.raise_for_status()
-
-                # Try to find action in headers or initial body chunk
-                # We read up to 16KB which should be plenty for the head and form tags
-                chunk = b""
-                async for b in response.aiter_bytes(16384):
-                    chunk = b
-                    break
-                html = chunk.decode("utf-8", errors="ignore")
-
-                match = re.search(r'action="([^"]+)"', html)
-                if match:
-                    action_url = match.group(1)
-                    if action_url.startswith("/"):
-                        base_url = f"https://wol.jw.org{action_url}"
-                    else:
-                        base_url = action_url
-                else:
-                    # Fallback to the final redirected URL
-                    base_url = str(response.url)
-
-            if base_url:
-                # Always ensure it is a full URL
-                if not base_url.startswith("http"):
-                    base_url = f"https://wol.jw.org{base_url if base_url.startswith('/') else '/' + base_url}"
-
-                # Ensure we only cache the base URL without query parameters or fragments
-                parsed = urlparse(base_url)
-                base_url = parsed._replace(query="", fragment="").geturl()
-
-                # Normalize to base format: remove segments after LPLANG
-                # e.g. /pt/wol/h/r5/lp-t/123 -> /pt/wol/h/r5/lp-t
-                parts = base_url.split("/")
-                try:
-                    wol_idx = parts.index("wol")
-                    if len(parts) > wol_idx + 3:
-                        base_url = "/".join(parts[:wol_idx + 4])
-                except (ValueError, IndexError):
-                    pass
-
-                # Remove trailing slash as it often causes 308 Permanent Redirects
-                if base_url.endswith("/"):
-                    base_url = base_url.rstrip("/")
-
-            self._wol_base_urls[wol_code] = base_url
-            return base_url
-
-        except Exception as e:
-            logger.warning(f"Failed to discover dynamic WOL base URL for {wol_code}: {e}")
-            raise ContentRetrievalError(
-                f"Failed to discover WOL base URL for {wol_code}: {e}"
-            ) from e
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -487,7 +402,6 @@ class JWOrgClient:
             ContentRetrievalError: If content retrieval fails
         """
         lang_code = language or settings.default_language
-        wol_info = self.WOL_LANG_MAP.get(lang_code, self.WOL_LANG_MAP["E"])
 
         # Support semicolon-separated queries
         sub_queries = [q.strip() for q in query.split(";") if q.strip()]
@@ -520,40 +434,23 @@ class JWOrgClient:
                     e_para = int(para_match.group(2))
 
             try:
-                base_url = await self._get_wol_base_url(wol_info["code"])
+                # Use the finder endpoint with wtlocale and query
+                search_url = "https://wol.jw.org/wol/finder"
+                params = {"wtlocale": lang_code, "q": sub_query}
 
-                # Use ORIGINAL sub_query for search to let WOL handle filtering
-                search_query = sub_query
-
-                logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
+                logger.info(f"Fetching WOL reference via finder: {search_url} (params={params})")
                 client = await self._get_http_client()
                 response = await self._get_with_manual_redirect_handling(
                     client,
-                    base_url,
-                    params={"q": search_query},
-                    wol_code=wol_info["code"],
+                    search_url,
+                    params=params
                 )
-
-                if response.status_code == 404:
-                    logger.warning(f"404 received for base_url {base_url}. Redetecting...")
-                    # Invalidate session cache for this language before retrying discovery
-                    if wol_info["code"] in self._wol_base_urls:
-                        del self._wol_base_urls[wol_info["code"]]
-
-                    base_url = await self._get_wol_base_url(wol_info["code"])
-                    logger.info(f"Retrying with new base_url: {base_url}")
-                    response = await self._get_with_manual_redirect_handling(
-                        client,
-                        base_url,
-                        params={"q": search_query},
-                        wol_code=wol_info["code"],
-                    )
 
                 response.raise_for_status()
 
                 html = response.text
                 final_url = str(response.url)
-                logger.info(f"Final resolved URL for '{search_query}': {final_url}")
+                logger.info(f"Final resolved URL for '{sub_query}': {final_url}")
 
                 # Check for direct article content even on lookup page
                 direct_paragraphs = WOLParser.parse_paragraphs(html)
