@@ -101,6 +101,17 @@ class Cache:
         self._cache[key] = CacheEntry(value, ttl)
         logger.info(f"CACHE SET: [{key_summary}] (key: {key[:8]}...) TTL: {ttl}s")
 
+    def remove(self, *args: Any) -> None:
+        """Remove entry from cache.
+
+        Args:
+            *args: Cache key components
+        """
+        key = self._make_key(*args)
+        if key in self._cache:
+            del self._cache[key]
+            logger.debug(f"Cache removed: {key}")
+
     def clear(self) -> None:
         """Clear all cache entries."""
         count = len(self._cache)

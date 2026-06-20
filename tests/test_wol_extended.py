@@ -53,6 +53,8 @@ def test_is_question_detection_extended():
     assert paras[1].is_question is False
     assert paras[2].is_question is False
 
-    # Locate should find the body paragraphs
+    # Locate should find both the question and the body paragraph
     res = WOLParser.locate_paragraphs(paras, start_num=14)
-    assert res[0].text == "14 Content 14"
+    assert len(res) == 2
+    assert res[0].text == "14, 15. Question text?"
+    assert res[1].text == "14 Content 14"

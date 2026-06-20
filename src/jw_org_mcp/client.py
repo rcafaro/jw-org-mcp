@@ -63,26 +63,35 @@ class JWOrgClient:
 
             client = await self._get_http_client()
             # client follows redirects by default in _get_http_client
-            response = await client.get(discovery_url)
-            response.raise_for_status()
 
-            html = response.text
-            # Look for the search form action to find the current path pattern
-            # <form ... action="/pt/wol/qt/r5/lp-t">
-            # We use the search form action URL directly as requested by the user.
-            match = re.search(r'action="([^"]+)"', html)
-            if match:
-                action_url = match.group(1)
-                if action_url.startswith("/"):
-                    base_url = f"https://wol.jw.org{action_url}"
+            # Efficiently discover: use streaming to only read enough for form action
+            # and follows redirects automatically
+            base_url = None
+            async with client.stream("GET", discovery_url) as response:
+                response.raise_for_status()
+
+                # Try to find action in headers or initial body chunk
+                # We read up to 16KB which should be plenty for the head and form tags
+                chunk = b""
+                async for b in response.aiter_bytes(16384):
+                    chunk = b
+                    break
+                html = chunk.decode("utf-8", errors="ignore")
+
+                match = re.search(r'action="([^"]+)"', html)
+                if match:
+                    action_url = match.group(1)
+                    if action_url.startswith("/"):
+                        base_url = f"https://wol.jw.org{action_url}"
+                    else:
+                        base_url = action_url
                 else:
-                    base_url = action_url
-            else:
-                # Fallback to the final redirected URL
-                base_url = str(response.url)
+                    # Fallback to the final redirected URL
+                    base_url = str(response.url)
 
             if settings.enable_cache:
-                self._cache.set(cache_key, value=base_url)
+                # Cache for 24 hours (86400s) as these paths don't change often
+                self._cache.set(cache_key, value=base_url, ttl_seconds=86400)
 
             return base_url
 
@@ -513,6 +522,15 @@ class JWOrgClient:
                     client, base_url, params={"q": search_query}
                 )
 
+                if response.status_code == 404:
+                    logger.warning(f"404 received for base_url {base_url}. Redetecting...")
+                    self._cache.remove(f"wol_base_url:{wol_info['code']}")
+                    base_url = await self._get_wol_base_url(wol_info["code"])
+                    logger.info(f"Retrying with new base_url: {base_url}")
+                    response = await self._get_with_manual_307_handling(
+                        client, base_url, params={"q": search_query}
+                    )
+
                 response.raise_for_status()
 
                 html = response.text
@@ -537,8 +555,12 @@ class JWOrgClient:
 
                     # Heuristic for it-books: collect articles that might be relevant
                     if "it-" in sub_query.lower() and len(links) > 1:
-                        # Follow up to top 3 if they seem relevant (too complex to perfectly match page ranges in link text)
-                        article_paths = [l["url"] for l in links[:3]]
+                        if s_page is not None:
+                            # User requested a page: collect ALL links on that page to consolidate
+                            article_paths = [l["url"] for l in links]
+                        else:
+                            # User requested a word: follow up to top 3
+                            article_paths = [l["url"] for l in links[:3]]
 
                     sub_all_paragraphs = []
                     for path in article_paths:

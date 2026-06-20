@@ -413,7 +413,7 @@ class WOLParser:
                         num = int(par_num_span["data-pnum"])
                     except (ValueError, TypeError):
                         pass
-
+                
                 if num is None:
                     m = re.match(r"^(\d+)[,.\s)]", text)
                     num = int(m.group(1)) if m else None
@@ -525,13 +525,13 @@ class WOLParser:
         if start_page is not None and start_num is None:
             if end_page is None:
                 end_page = start_page
-
+            
             # Find the first page marker to know the starting page if it's not explicitly set for early paragraphs
             first_marker_page = next((p.page for p in paragraphs if p.page is not None), None)
 
             results = []
             last_header = None
-
+            
             # Track if we have seen any page marker yet
             seen_any_marker = False
             for p in paragraphs:
@@ -549,20 +549,20 @@ class WOLParser:
                     # Fallback for small pages with no markers
                     elif first_marker_page is None:
                         in_range = True
-
+                
                 if p.is_header:
                     last_header = p
-
+                
                 if in_range:
                     # If we found content in range, ensure we include the last seen header
                     if last_header and last_header not in results:
                         results.append(last_header)
                     if p not in results:
                         results.append(p)
-
+            
             if results:
                 return results
-
+            
             # If no results and we have no page markers at all, return everything
             # (handles small it-2 lookup pages)
             if not seen_any_marker:
