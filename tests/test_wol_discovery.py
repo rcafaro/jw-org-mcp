@@ -79,3 +79,59 @@ async def test_get_wol_reference_uses_discovered_url():
 
                 # First call should be to discovery via stream
                 assert mock_http_client.stream.call_args_list[0][0][1] == "https://wol.jw.org/pt"
+
+@pytest.mark.asyncio
+async def test_wol_base_url_strips_query_and_fragment():
+    client = JWOrgClient()
+
+    # Mock response for discovery URL with query and fragment in action
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.url = httpx.URL("https://wol.jw.org/en/wol/h/r1/lp-e")
+
+    async def mock_aiter_bytes(chunk_size):
+        # action URL has query and fragment
+        yield b'<html><form action="/en/wol/qt/r1/lp-e?q=test#frag"></form></html>'
+
+    mock_response.aiter_bytes = mock_aiter_bytes
+    mock_response.raise_for_status = MagicMock()
+
+    mock_http_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_stream_cm = MagicMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock()
+    mock_http_client.stream.return_value = mock_stream_cm
+
+    with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
+        base_url = await client._get_wol_base_url("en")
+
+        # It should strip query and fragment
+        assert base_url == "https://wol.jw.org/en/wol/qt/r1/lp-e"
+
+@pytest.mark.asyncio
+async def test_wol_base_url_fallback_strips_query_and_fragment():
+    client = JWOrgClient()
+
+    # Mock response for discovery URL with no action, fallback to final URL
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    # Final URL has query and fragment
+    mock_response.url = httpx.URL("https://wol.jw.org/en/wol/h/r1/lp-e?q=fallback#frag")
+
+    async def mock_aiter_bytes(chunk_size):
+        yield b'<html>no action here</html>'
+
+    mock_response.aiter_bytes = mock_aiter_bytes
+    mock_response.raise_for_status = MagicMock()
+
+    mock_http_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_stream_cm = MagicMock()
+    mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_stream_cm.__aexit__ = AsyncMock()
+    mock_http_client.stream.return_value = mock_stream_cm
+
+    with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
+        base_url = await client._get_wol_base_url("en")
+
+        # It should strip query and fragment from fallback URL
+        assert base_url == "https://wol.jw.org/en/wol/h/r1/lp-e"

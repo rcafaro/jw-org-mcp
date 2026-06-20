@@ -89,6 +89,11 @@ class JWOrgClient:
                     # Fallback to the final redirected URL
                     base_url = str(response.url)
 
+            if base_url:
+                # Ensure we only cache the base URL without query parameters or fragments
+                parsed = urlparse(base_url)
+                base_url = parsed._replace(query="", fragment="").geturl()
+
             if settings.enable_cache:
                 # Cache for 24 hours (86400s) as these paths don't change often
                 self._cache.set(cache_key, value=base_url, ttl_seconds=86400)
