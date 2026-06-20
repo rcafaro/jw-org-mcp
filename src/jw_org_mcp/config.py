@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     connection_pool_size: int = 100
 
     # Default search settings
-    default_language: str = "E"
+    default_language: str = "T"
     default_search_limit: int = 10
     default_search_filter: str = "all"
 

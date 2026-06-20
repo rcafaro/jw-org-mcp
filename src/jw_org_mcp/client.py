@@ -32,7 +32,7 @@ class JWOrgClient:
     ENABLE_PARAGRAPH_FILTERING = False
 
     # Debug flag to log final response content
-    LOG_RESPONSE_CONTENT = True
+    LOG_RESPONSE_CONTENT = False
 
     def __init__(self) -> None:
         """Initialize the client."""
