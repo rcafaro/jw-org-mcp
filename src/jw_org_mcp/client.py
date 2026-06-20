@@ -54,7 +54,10 @@ class JWOrgClient:
         if settings.enable_cache:
             cached = self._cache.get(cache_key)
             if cached:
+                logger.debug(f"WOL base URL cache hit for {wol_code}: {cached}")
                 return cached
+            else:
+                logger.debug(f"WOL base URL cache miss for {wol_code}")
 
         try:
             # Navigate to wol.jw.org/{wol_code} to see where it redirects
@@ -244,11 +247,15 @@ class JWOrgClient:
         Raises:
             ContentRetrievalError: If content retrieval fails
         """
+        # Normalize URL for caching
+        parsed = urlparse(url)
+        normalized_url = parsed._replace(query="", fragment="").geturl()
+
         # Check cache
         if settings.enable_cache:
-            cached = self._cache.get(url, "article")
+            cached = self._cache.get(normalized_url, "article")
             if cached is not None:
-                logger.info(f"Cache hit for article: {url}")
+                logger.info(f"Cache hit for article: {normalized_url}")
                 content, metadata = cached
                 metadata.cache_hit = True
                 return content, metadata
@@ -273,7 +280,7 @@ class JWOrgClient:
 
             # Cache result
             if settings.enable_cache:
-                self._cache.set(url, "article", value=(article, metadata))
+                self._cache.set(normalized_url, "article", value=(article, metadata))
 
             return article, metadata
 
@@ -501,12 +508,15 @@ class JWOrgClient:
                 if para_match.group(2):
                     e_para = int(para_match.group(2))
 
+            # Clean query for more consistent caching
+            cleaned_query = WOLParser.clean_query(sub_query)
+
             # Check cache
-            cache_key = f"wol_ref:{sub_query}:{s_para}:{e_para}:{lang_code}"
+            cache_key = f"wol_ref:{cleaned_query}:{s_para}:{e_para}:{lang_code}"
             if settings.enable_cache:
                 cached = self._cache.get(cache_key)
                 if cached is not None:
-                    logger.info(f"Cache hit for WOL reference: {sub_query}")
+                    logger.info(f"Cache hit for WOL reference: {cleaned_query} (original: {sub_query})")
                     content, metadata = cached
                     all_combined_paragraphs.extend(content.paragraphs)
                     final_source_urls.append(content.source_url)
@@ -516,10 +526,8 @@ class JWOrgClient:
             try:
                 base_url = await self._get_wol_base_url(wol_info["code"])
 
-                # Use cleaned query for search if it contains paragraph markers
-                search_query = sub_query
-                if para_match:
-                    search_query = WOLParser.clean_query(sub_query)
+                # Use cleaned query for search
+                search_query = cleaned_query
 
                 logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
                 client = await self._get_http_client()
