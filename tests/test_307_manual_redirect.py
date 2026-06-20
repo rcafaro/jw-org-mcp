@@ -5,7 +5,7 @@ from jw_org_mcp.client import JWOrgClient
 from jw_org_mcp.models import WOLParagraph
 
 @pytest.mark.asyncio
-async def test_get_wol_reference_handles_307_redirect():
+async def test_get_wol_reference_handles_redirects():
     client = JWOrgClient()
 
     # 1. Mock WOL base URL discovery
@@ -40,44 +40,3 @@ async def test_get_wol_reference_handles_307_redirect():
                 assert result.paragraphs[0].text == "Redirected Content"
                 assert mock_http_client.get.call_count == 1
                 assert str(mock_http_client.get.call_args_list[0][0][0]) == "https://wol.jw.org/en/wol/qt/r1/lp-e"
-
-@pytest.mark.asyncio
-async def test_get_wol_reference_handles_308_permanent_redirect_update_cache():
-    client = JWOrgClient()
-    client.clear_cache()
-
-    with patch.object(client, "_get_wol_base_url", return_value="https://wol.jw.org/en/wol/qt/r1/lp-e/"):
-        mock_http_client = AsyncMock(spec=httpx.AsyncClient)
-
-        # Final response
-        mock_final_response = MagicMock(spec=httpx.Response)
-        mock_final_response.status_code = 200
-        mock_final_response.text = "<html><article><p class='sb'>Final Content</p></article></html>"
-        mock_final_response.url = httpx.URL("https://wol.jw.org/en/wol/qt/r1/lp-e")
-
-        # 308 Redirect response in history
-        mock_308_resp = MagicMock(spec=httpx.Response)
-        mock_308_resp.status_code = 308
-        mock_308_resp.headers = {"Location": "https://wol.jw.org/en/wol/qt/r1/lp-e"}
-        mock_308_resp.url = httpx.URL("https://wol.jw.org/en/wol/qt/r1/lp-e/")
-
-        mock_final_response.history = [mock_308_resp]
-
-        mock_http_client.get.return_value = mock_final_response
-
-        with patch.object(client, "_get_http_client", return_value=mock_http_client):
-            with patch("jw_org_mcp.client.WOLParser") as mock_parser:
-                mock_parser.clean_query.side_effect = lambda x: x
-                mock_parser.is_lookup_page.return_value = False
-                mock_parser.parse_paragraphs.return_value = [
-                    WOLParagraph(number=1, text="Final Content", source="test", page=1)
-                ]
-                mock_parser.locate_paragraphs.return_value = mock_parser.parse_paragraphs.return_value
-                mock_parser.extract_page_markers.return_value = {1}
-
-                # Execute
-                await client.get_wol_reference("w23.08", language="E")
-
-                # Verify that cache was updated to the new base URL (without trailing slash)
-                assert client._cache.get("wol_base_url:en") == "https://wol.jw.org/en/wol/qt/r1/lp-e"
-

@@ -42,9 +42,7 @@ async def test_wol_base_url_redetection_on_404():
         res, metadata = await client.get_wol_reference("w13 1/1 p. 1")
 
         # Verify 404 handled:
-        # 1. cache.remove called for base url
-        client._cache.remove.assert_called_with("wol_base_url:en")
-        # 2. _get_wol_base_url called again
+        # 1. _get_wol_base_url called again
         assert client._get_wol_base_url.call_count == 2
         # 3. Successful result returned
         assert res.paragraphs[0].text == "Success"

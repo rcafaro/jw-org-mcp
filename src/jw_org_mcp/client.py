@@ -1,10 +1,8 @@
 """JW.Org API client."""
 
-import json
 import logging
 import re
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -30,9 +28,6 @@ logger = logging.getLogger(__name__)
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
 
-    # Persistent cache file for WOL base URLs
-    PERSISTENT_CACHE_FILE = Path(".jw_org_mcp_wol_cache.json")
-
     # Mapping from MCP language codes to WOL language and library codes
     WOL_LANG_MAP = {
         "E": {"code": "en", "lib": "lp-e"},
@@ -46,58 +41,6 @@ class JWOrgClient:
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
 
-    def _load_persistent_wol_cache(self, wol_code: str) -> str | None:
-        """Load WOL base URL from persistent storage.
-
-        Args:
-            wol_code: WOL language code
-
-        Returns:
-            The cached URL or None
-        """
-        if not self.PERSISTENT_CACHE_FILE.exists():
-            return None
-
-        try:
-            with open(self.PERSISTENT_CACHE_FILE, "r") as f:
-                cache_data = json.load(f)
-                entry = cache_data.get(wol_code)
-                if entry:
-                    # Check if entry is older than 24 hours
-                    timestamp = datetime.fromisoformat(entry["timestamp"])
-                    if datetime.now(UTC) - timestamp < timedelta(hours=24):
-                        return entry["url"]
-        except Exception as e:
-            logger.warning(f"Failed to load persistent WOL cache: {e}")
-
-        return None
-
-    def _save_persistent_wol_cache(self, wol_code: str, url: str) -> None:
-        """Save WOL base URL to persistent storage.
-
-        Args:
-            wol_code: WOL language code
-            url: The discovered URL
-        """
-        cache_data = {}
-        if self.PERSISTENT_CACHE_FILE.exists():
-            try:
-                with open(self.PERSISTENT_CACHE_FILE, "r") as f:
-                    cache_data = json.load(f)
-            except Exception:
-                pass
-
-        cache_data[wol_code] = {
-            "url": url,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-
-        try:
-            with open(self.PERSISTENT_CACHE_FILE, "w") as f:
-                json.dump(cache_data, f, indent=2)
-        except Exception as e:
-            logger.warning(f"Failed to save persistent WOL cache: {e}")
-
     async def _get_wol_base_url(self, wol_code: str) -> str:
         """Dynamically discover the WOL base URL for a language.
 
@@ -107,24 +50,6 @@ class JWOrgClient:
         Returns:
             The discovered base URL
         """
-        cache_key = f"wol_base_url:{wol_code}"
-        if settings.enable_cache:
-            # 1. Try memory cache
-            cached = self._cache.get(cache_key)
-            if cached:
-                logger.info(f"WOL base URL memory cache hit for {wol_code}: {cached}")
-                return cached
-
-            # 2. Try persistent cache
-            persistent_cached = self._load_persistent_wol_cache(wol_code)
-            if persistent_cached:
-                logger.info(f"WOL base URL persistent cache hit for {wol_code}: {persistent_cached}")
-                # Backfill memory cache
-                self._cache.set(cache_key, value=persistent_cached, ttl_seconds=86400)
-                return persistent_cached
-
-            logger.info(f"WOL base URL cache miss for {wol_code}")
-
         try:
             # Navigate to wol.jw.org/{wol_code} to see where it redirects
             discovery_url = f"https://wol.jw.org/{wol_code}"
@@ -180,11 +105,6 @@ class JWOrgClient:
                 # Remove trailing slash as it often causes 308 Permanent Redirects
                 if base_url.endswith("/"):
                     base_url = base_url.rstrip("/")
-
-            if settings.enable_cache:
-                # Cache for 24 hours (86400s) as these paths don't change often
-                self._cache.set(cache_key, value=base_url, ttl_seconds=86400)
-                self._save_persistent_wol_cache(wol_code, base_url)
 
             return base_url
 
@@ -516,40 +436,19 @@ class JWOrgClient:
         params: dict[str, Any] | None = None,
         wol_code: str | None = None,
     ) -> httpx.Response:
-        """Execute a GET request and manually follow redirects, updating cache if needed.
+        """Execute a GET request and manually follow redirects.
 
         Args:
             client: The HTTP client
             url: The URL to fetch
             params: Optional query parameters
-            wol_code: Optional WOL language code to update cache on 308
+            wol_code: Optional WOL language code (unused)
 
         Returns:
             The final HTTP response
         """
-        # Use automatic redirect following but monitor the history
+        # Use automatic redirect following
         response = await client.get(url, params=params, follow_redirects=True)
-
-        # Check for 308 Permanent Redirects in history to update base URL cache
-        for resp in response.history:
-            if resp.status_code == 308 and wol_code:
-                new_location = resp.headers.get("Location")
-                if new_location:
-                    new_base_url = str(resp.url.join(new_location))
-                    # Normalize: strip trailing slash and query/fragment
-                    parsed = urlparse(new_base_url)
-                    new_base_url = parsed._replace(query="", fragment="").geturl()
-                    if new_base_url.endswith("/"):
-                        new_base_url = new_base_url.rstrip("/")
-
-                    logger.info(
-                        f"Detected 308 Permanent Redirect for {wol_code}. "
-                        f"Updating cache to: {new_base_url}"
-                    )
-                    cache_key = f"wol_base_url:{wol_code}"
-                    self._cache.set(cache_key, value=new_base_url, ttl_seconds=86400)
-                    self._save_persistent_wol_cache(wol_code, new_base_url)
-
         return response
 
     async def get_wol_reference(
@@ -641,7 +540,6 @@ class JWOrgClient:
 
                 if response.status_code == 404:
                     logger.warning(f"404 received for base_url {base_url}. Redetecting...")
-                    self._cache.remove(f"wol_base_url:{wol_info['code']}")
                     base_url = await self._get_wol_base_url(wol_info["code"])
                     logger.info(f"Retrying with new base_url: {base_url}")
                     response = await self._get_with_manual_redirect_handling(
