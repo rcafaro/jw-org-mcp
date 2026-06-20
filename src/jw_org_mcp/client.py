@@ -1,8 +1,10 @@
 """JW.Org API client."""
 
+import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -28,6 +30,9 @@ logger = logging.getLogger(__name__)
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
 
+    # Persistent cache file for WOL base URLs
+    PERSISTENT_CACHE_FILE = Path(".jw_org_mcp_wol_cache.json")
+
     # Mapping from MCP language codes to WOL language and library codes
     WOL_LANG_MAP = {
         "E": {"code": "en", "lib": "lp-e"},
@@ -41,6 +46,58 @@ class JWOrgClient:
         self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
 
+    def _load_persistent_wol_cache(self, wol_code: str) -> str | None:
+        """Load WOL base URL from persistent storage.
+
+        Args:
+            wol_code: WOL language code
+
+        Returns:
+            The cached URL or None
+        """
+        if not self.PERSISTENT_CACHE_FILE.exists():
+            return None
+
+        try:
+            with open(self.PERSISTENT_CACHE_FILE, "r") as f:
+                cache_data = json.load(f)
+                entry = cache_data.get(wol_code)
+                if entry:
+                    # Check if entry is older than 24 hours
+                    timestamp = datetime.fromisoformat(entry["timestamp"])
+                    if datetime.now(UTC) - timestamp < timedelta(hours=24):
+                        return entry["url"]
+        except Exception as e:
+            logger.warning(f"Failed to load persistent WOL cache: {e}")
+
+        return None
+
+    def _save_persistent_wol_cache(self, wol_code: str, url: str) -> None:
+        """Save WOL base URL to persistent storage.
+
+        Args:
+            wol_code: WOL language code
+            url: The discovered URL
+        """
+        cache_data = {}
+        if self.PERSISTENT_CACHE_FILE.exists():
+            try:
+                with open(self.PERSISTENT_CACHE_FILE, "r") as f:
+                    cache_data = json.load(f)
+            except Exception:
+                pass
+
+        cache_data[wol_code] = {
+            "url": url,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            with open(self.PERSISTENT_CACHE_FILE, "w") as f:
+                json.dump(cache_data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save persistent WOL cache: {e}")
+
     async def _get_wol_base_url(self, wol_code: str) -> str:
         """Dynamically discover the WOL base URL for a language.
 
@@ -52,12 +109,21 @@ class JWOrgClient:
         """
         cache_key = f"wol_base_url:{wol_code}"
         if settings.enable_cache:
+            # 1. Try memory cache
             cached = self._cache.get(cache_key)
             if cached:
-                logger.debug(f"WOL base URL cache hit for {wol_code}: {cached}")
+                logger.debug(f"WOL base URL memory cache hit for {wol_code}: {cached}")
                 return cached
-            else:
-                logger.debug(f"WOL base URL cache miss for {wol_code}")
+
+            # 2. Try persistent cache
+            persistent_cached = self._load_persistent_wol_cache(wol_code)
+            if persistent_cached:
+                logger.debug(f"WOL base URL persistent cache hit for {wol_code}: {persistent_cached}")
+                # Backfill memory cache
+                self._cache.set(cache_key, value=persistent_cached, ttl_seconds=86400)
+                return persistent_cached
+
+            logger.debug(f"WOL base URL cache miss for {wol_code}")
 
         try:
             # Navigate to wol.jw.org/{wol_code} to see where it redirects
@@ -93,13 +159,31 @@ class JWOrgClient:
                     base_url = str(response.url)
 
             if base_url:
+                # Always ensure it is a full URL
+                if not base_url.startswith("http"):
+                    base_url = f"https://wol.jw.org{base_url if base_url.startswith('/') else '/' + base_url}"
+
                 # Ensure we only cache the base URL without query parameters or fragments
                 parsed = urlparse(base_url)
                 base_url = parsed._replace(query="", fragment="").geturl()
 
+                # Normalize to base format: remove segments after LPLANG
+                # e.g. /pt/wol/h/r5/lp-t/123 -> /pt/wol/h/r5/lp-t
+                parts = base_url.split("/")
+                try:
+                    wol_idx = parts.index("wol")
+                    if len(parts) > wol_idx + 3:
+                        base_url = "/".join(parts[:wol_idx + 4])
+                except (ValueError, IndexError):
+                    pass
+
+                if not base_url.endswith("/"):
+                    base_url += "/"
+
             if settings.enable_cache:
                 # Cache for 24 hours (86400s) as these paths don't change often
                 self._cache.set(cache_key, value=base_url, ttl_seconds=86400)
+                self._save_persistent_wol_cache(wol_code, base_url)
 
             return base_url
 
