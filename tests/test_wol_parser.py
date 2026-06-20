@@ -61,31 +61,60 @@ def test_locate_paragraphs_preference():
     assert len(res) == 1
     assert res[0].text == "Answer 15"
 
+def test_locate_paragraphs_whole_page():
+    paragraphs = [
+        WOLParagraph(number=None, text="Title", is_header=True, page=10, source="test"),
+        WOLParagraph(number=1, text="Para 1", page=10, source="test"),
+        WOLParagraph(number=2, text="Para 2", page=11, source="test"),
+    ]
+    # Page 10 only
+    res = WOLParser.locate_paragraphs(paragraphs, start_page=10)
+    assert len(res) == 2
+    assert res[0].is_header is True
+    assert res[1].number == 1
+
+def test_locate_paragraphs_header_before_marker():
+    paragraphs = [
+        WOLParagraph(text="Initial Header", is_header=True, page=None, source="test"),
+        WOLParagraph(text="Para 1", page=10, source="test"),
+    ]
+    # Header has no page, but is followed by page 10.
+    # If we request page 10, it should be included.
+    res = WOLParser.locate_paragraphs(paragraphs, start_page=10)
+    assert len(res) == 2
+    assert res[0].text == "Initial Header"
+
 def test_parse_paragraphs_bodytxt():
     html = """
     <div class="bodyTxt">
-        <p>1. First paragraph.</p>
+        <h1>Heading</h1>
+        <p>1. First paragraph with <span class="it">italics</span> and <a href="#">link</a>.</p>
         <p>1, 2. Question?</p>
-        <p>2. Second paragraph.</p>
+        <p>2. Second paragraph with <span id="page12" class="pageNum"></span> page marker.</p>
     </div>
     """
     paras = WOLParser.parse_paragraphs(html)
-    assert len(paras) == 3
-    assert paras[0].number == 1
-    assert paras[0].is_question is False
-    assert paras[1].is_question is True
-    assert paras[2].number == 2
+    assert len(paras) == 4
+    assert paras[0].is_header is True
+    assert paras[1].number == 1
+    assert "italics and link" in paras[1].text
+    assert paras[2].is_question is True
+    assert paras[3].number == 2
+    assert paras[3].page == 12
 
 def test_parse_paragraphs_direct():
     html = """
     <article class="article document">
+        <h1>Article Title</h1>
         <p class="sb"><span class="parNum" data-pnum="1">1</span> Content 1</p>
         <p class="qu">Question?</p>
         <p class="sb">2 Content 2</p>
     </article>
     """
     paras = WOLParser.parse_paragraphs(html)
-    assert len(paras) == 3
-    assert paras[0].number == 1
-    assert paras[1].is_question is True
-    assert paras[2].number == 2
+    assert len(paras) == 4
+    assert paras[0].is_header is True
+    assert paras[0].text == "Article Title"
+    assert paras[1].number == 1
+    assert paras[2].is_question is True
+    assert paras[3].number == 2

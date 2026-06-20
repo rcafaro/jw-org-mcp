@@ -295,8 +295,11 @@ async def _handle_get_wol_reference(arguments: dict[str, Any]) -> list[TextConte
         result_text += "No paragraphs found for the specified range.\n"
     else:
         for p in content.paragraphs:
-            label = f"§{p.number}" if p.number else "§[pos]"
-            result_text += f"**{label}:** {p.text}\n\n"
+            if p.is_header:
+                result_text += f"## {p.text}\n\n"
+            else:
+                label = f"§{p.number}" if p.number else "§[pos]"
+                result_text += f"**{label}:** {p.text}\n\n"
 
     return [TextContent(type="text", text=result_text)]
 

@@ -518,8 +518,13 @@ class JWOrgClient:
                 html = response.text
                 final_url = str(response.url)
 
-                # Handle lookup page
-                if WOLParser.is_lookup_page(html):
+                # Check for direct article content even on lookup page
+                direct_paragraphs = WOLParser.parse_paragraphs(html)
+                # Significant content heuristic: more than 1 body paragraph
+                has_significant_content = len([p for p in direct_paragraphs if p.is_body]) > 1
+
+                # Handle lookup page if no direct content
+                if WOLParser.is_lookup_page(html) and not has_significant_content:
                     links = WOLParser.extract_lookup_links(html)
                     if not links:
                         raise ContentRetrievalError(f"WOL search returned no results for: {sub_query}")
@@ -543,6 +548,11 @@ class JWOrgClient:
 
                         resp.raise_for_status()
                         sub_all_paragraphs.extend(WOLParser.parse_paragraphs(resp.text))
+
+                        # Fallback for it-books: if the article has an <h1> title but it wasn't
+                        # caught by locate_paragraphs (e.g. no page marker on h1),
+                        # ensure it's included if it's the start of the article.
+
                         final_source_urls.append(str(resp.url))
                         all_pages_found.update(WOLParser.extract_page_markers(resp.text))
 
