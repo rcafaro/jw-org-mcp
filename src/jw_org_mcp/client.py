@@ -112,18 +112,18 @@ class JWOrgClient:
             # 1. Try memory cache
             cached = self._cache.get(cache_key)
             if cached:
-                logger.debug(f"WOL base URL memory cache hit for {wol_code}: {cached}")
+                logger.info(f"WOL base URL memory cache hit for {wol_code}: {cached}")
                 return cached
 
             # 2. Try persistent cache
             persistent_cached = self._load_persistent_wol_cache(wol_code)
             if persistent_cached:
-                logger.debug(f"WOL base URL persistent cache hit for {wol_code}: {persistent_cached}")
+                logger.info(f"WOL base URL persistent cache hit for {wol_code}: {persistent_cached}")
                 # Backfill memory cache
                 self._cache.set(cache_key, value=persistent_cached, ttl_seconds=86400)
                 return persistent_cached
 
-            logger.debug(f"WOL base URL cache miss for {wol_code}")
+            logger.info(f"WOL base URL cache miss for {wol_code}")
 
         try:
             # Navigate to wol.jw.org/{wol_code} to see where it redirects
@@ -177,8 +177,9 @@ class JWOrgClient:
                 except (ValueError, IndexError):
                     pass
 
-                if not base_url.endswith("/"):
-                    base_url += "/"
+                # Remove trailing slash as it often causes 308 Permanent Redirects
+                if base_url.endswith("/"):
+                    base_url = base_url.rstrip("/")
 
             if settings.enable_cache:
                 # Cache for 24 hours (86400s) as these paths don't change often
@@ -508,30 +509,46 @@ class JWOrgClient:
             logger.error(f"Unexpected error fetching video captions: {e}")
             raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
 
-    async def _get_with_manual_307_handling(
-        self, client: httpx.AsyncClient, url: str, params: dict[str, Any] | None = None, max_redirects: int = 3
+    async def _get_with_manual_redirect_handling(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, Any] | None = None,
+        wol_code: str | None = None,
     ) -> httpx.Response:
-        """Execute a GET request and manually follow 307 redirects.
+        """Execute a GET request and manually follow redirects, updating cache if needed.
 
         Args:
             client: The HTTP client
             url: The URL to fetch
             params: Optional query parameters
-            max_redirects: Maximum number of 307 redirects to follow
+            wol_code: Optional WOL language code to update cache on 308
 
         Returns:
             The final HTTP response
         """
-        response = await client.get(url, params=params)
+        # Use automatic redirect following but monitor the history
+        response = await client.get(url, params=params, follow_redirects=True)
 
-        redirect_count = 0
-        while response.status_code == 307 and "Location" in response.headers and redirect_count < max_redirects:
-            location = response.headers["Location"]
-            # Handle relative URLs by joining with the current response URL
-            redirect_url = str(response.url.join(location))
-            logger.info(f"Handling manual 307 redirect ({redirect_count + 1}) to: {redirect_url}")
-            response = await client.get(redirect_url)
-            redirect_count += 1
+        # Check for 308 Permanent Redirects in history to update base URL cache
+        for resp in response.history:
+            if resp.status_code == 308 and wol_code:
+                new_location = resp.headers.get("Location")
+                if new_location:
+                    new_base_url = str(resp.url.join(new_location))
+                    # Normalize: strip trailing slash and query/fragment
+                    parsed = urlparse(new_base_url)
+                    new_base_url = parsed._replace(query="", fragment="").geturl()
+                    if new_base_url.endswith("/"):
+                        new_base_url = new_base_url.rstrip("/")
+
+                    logger.info(
+                        f"Detected 308 Permanent Redirect for {wol_code}. "
+                        f"Updating cache to: {new_base_url}"
+                    )
+                    cache_key = f"wol_base_url:{wol_code}"
+                    self._cache.set(cache_key, value=new_base_url, ttl_seconds=86400)
+                    self._save_persistent_wol_cache(wol_code, new_base_url)
 
         return response
 
@@ -615,8 +632,11 @@ class JWOrgClient:
 
                 logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
                 client = await self._get_http_client()
-                response = await self._get_with_manual_307_handling(
-                    client, base_url, params={"q": search_query}
+                response = await self._get_with_manual_redirect_handling(
+                    client,
+                    base_url,
+                    params={"q": search_query},
+                    wol_code=wol_info["code"],
                 )
 
                 if response.status_code == 404:
@@ -624,8 +644,11 @@ class JWOrgClient:
                     self._cache.remove(f"wol_base_url:{wol_info['code']}")
                     base_url = await self._get_wol_base_url(wol_info["code"])
                     logger.info(f"Retrying with new base_url: {base_url}")
-                    response = await self._get_with_manual_307_handling(
-                        client, base_url, params={"q": search_query}
+                    response = await self._get_with_manual_redirect_handling(
+                        client,
+                        base_url,
+                        params={"q": search_query},
+                        wol_code=wol_info["code"],
                     )
 
                 response.raise_for_status()
@@ -663,7 +686,9 @@ class JWOrgClient:
                     for path in article_paths:
                         f_url = f"https://wol.jw.org{path}"
                         logger.info(f"Following lookup link: {f_url}")
-                        resp = await self._get_with_manual_307_handling(client, f_url)
+                        resp = await self._get_with_manual_redirect_handling(
+                            client, f_url
+                        )
 
                         resp.raise_for_status()
                         sub_all_paragraphs.extend(WOLParser.parse_paragraphs(resp.text))

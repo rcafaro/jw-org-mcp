@@ -21,7 +21,7 @@ async def test_wol_base_url_redetection_on_404():
     # Mock cache remove
     client._cache.remove = MagicMock()
 
-    # Mock responses for _get_with_manual_307_handling
+    # Mock responses for _get_with_manual_redirect_handling
     # First call to old_url returns 404
     # Second call (after redetection) to new_url returns 200
     mock_404_resp = MagicMock()
@@ -33,12 +33,12 @@ async def test_wol_base_url_redetection_on_404():
     mock_200_resp.url = MagicMock()
     mock_200_resp.url.join = lambda x: x
 
-    async def mock_manual_307(c, url, params=None):
+    async def mock_manual_redirect(c, url, params=None, wol_code=None):
         if "old" in str(url):
             return mock_404_resp
         return mock_200_resp
 
-    with patch("jw_org_mcp.client.JWOrgClient._get_with_manual_307_handling", side_effect=mock_manual_307):
+    with patch("jw_org_mcp.client.JWOrgClient._get_with_manual_redirect_handling", side_effect=mock_manual_redirect):
         res, metadata = await client.get_wol_reference("w13 1/1 p. 1")
 
         # Verify 404 handled:

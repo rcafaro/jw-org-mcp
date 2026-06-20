@@ -38,8 +38,8 @@ async def test_wol_base_url_discovery():
     with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
         base_url = await client._get_wol_base_url("pt")
 
-        # It should extract the path and keep the lp-X part and end with a slash
-        assert base_url == "https://wol.jw.org/pt/wol/qt/r5/lp-t/"
+        # It should extract the path and keep the lp-X part
+        assert base_url == "https://wol.jw.org/pt/wol/qt/r5/lp-t"
         mock_http_client.stream.assert_called_with("GET", "https://wol.jw.org/pt")
 
 @pytest.mark.asyncio
@@ -84,7 +84,7 @@ async def test_get_wol_reference_uses_discovered_url():
             mock_parser.extract_page_markers.return_value = {1}
             mock_parser.clean_query.side_effect = lambda x: x # pass through
 
-            with patch("jw_org_mcp.client.JWOrgClient._get_with_manual_307_handling", return_value=mock_search_response) as mock_307:
+            with patch("jw_org_mcp.client.JWOrgClient._get_with_manual_redirect_handling", return_value=mock_search_response) as mock_redirect:
                 await client.get_wol_reference("w23.08", language="T")
                 mock_http_client.stream.assert_called()
 
@@ -113,8 +113,8 @@ async def test_wol_base_url_strips_query_and_fragment():
     with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
         base_url = await client._get_wol_base_url("en")
 
-        # It should strip query and fragment but keep lp-e and end with slash
-        assert base_url == "https://wol.jw.org/en/wol/qt/r1/lp-e/"
+        # It should strip query and fragment but keep lp-e
+        assert base_url == "https://wol.jw.org/en/wol/qt/r1/lp-e"
 
 @pytest.mark.asyncio
 async def test_wol_base_url_fallback_strips_query_and_fragment():
@@ -141,8 +141,8 @@ async def test_wol_base_url_fallback_strips_query_and_fragment():
     with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
         base_url = await client._get_wol_base_url("en")
 
-        # It should strip query and fragment from fallback URL and end with slash
-        assert base_url == "https://wol.jw.org/en/wol/h/r1/lp-e/"
+        # It should strip query and fragment from fallback URL
+        assert base_url == "https://wol.jw.org/en/wol/h/r1/lp-e"
 
 @pytest.mark.asyncio
 async def test_wol_base_url_persistent_cache(tmp_path, monkeypatch):
@@ -172,7 +172,7 @@ async def test_wol_base_url_persistent_cache(tmp_path, monkeypatch):
 
     with patch.object(JWOrgClient, "_get_http_client", return_value=mock_http_client):
         base_url = await client._get_wol_base_url("pt")
-        assert base_url == "https://wol.jw.org/pt/wol/qt/r5/lp-t/"
+        assert base_url == "https://wol.jw.org/pt/wol/qt/r5/lp-t"
         assert cache_file.exists()
 
         # 2. Second discovery (should hit persistent cache)
@@ -183,4 +183,4 @@ async def test_wol_base_url_persistent_cache(tmp_path, monkeypatch):
         mock_http_client.stream.side_effect = Exception("Should not be called")
 
         base_url_2 = await client._get_wol_base_url("pt")
-        assert base_url_2 == "https://wol.jw.org/pt/wol/qt/r5/lp-t/"
+        assert base_url_2 == "https://wol.jw.org/pt/wol/qt/r5/lp-t"
