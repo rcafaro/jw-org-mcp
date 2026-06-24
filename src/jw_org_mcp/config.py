@@ -14,10 +14,6 @@ class Settings(BaseSettings):
     wol_base_url: str = "https://wol.jw.org"
     cdn_base_url: str = "https://b.jw-cdn.org"
 
-    # Cache settings
-    cache_ttl_seconds: int = 900  # 15 minutes
-    enable_cache: bool = True
-
     # Request settings
     request_timeout: int = 30
     max_retries: int = 3

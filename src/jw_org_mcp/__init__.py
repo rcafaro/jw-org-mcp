@@ -2,6 +2,7 @@
 
 import asyncio
 
+import anyio
 from mcp.server.stdio import stdio_server
 
 from .server import app, cleanup
@@ -16,10 +17,14 @@ async def async_main() -> None:
     """Async main function."""
     try:
         async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream,
-                write_stream,
-                app.create_initialization_options(),
-            )
+            try:
+                await app.run(
+                    read_stream,
+                    write_stream,
+                    app.create_initialization_options(),
+                )
+            except* anyio.ClosedResourceError:
+                # Ignore closed resource errors during shutdown
+                pass
     finally:
         await cleanup()

@@ -21,7 +21,7 @@ The JW.Org MCP Tool ensures that scriptural and doctrinal information comes excl
 - **Full Article Retrieval**: Get complete article content with scripture references
 - **Scripture Lookup**: Direct scripture reference search
 - **References Lookup**: understands jw references and extracts them
-- **Performance Optimized**: 15-minute caching, Brotli compression, async operations
+- **Performance Optimized**: Brotli compression, async operations
 - **Structured Output**: Machine-readable responses with verification metadata
 
 ## Installation
@@ -117,10 +117,6 @@ see DOCKER.md
 Configuration is done via environment variables with the prefix `JWORG_MCP_`:
 
 ```bash
-# Cache settings
-export JWORG_MCP_CACHE_TTL_SECONDS=900  # 15 minutes (default)
-export JWORG_MCP_ENABLE_CACHE=true
-
 # Request settings
 export JWORG_MCP_REQUEST_TIMEOUT=30
 export JWORG_MCP_MAX_RETRIES=3
@@ -223,12 +219,6 @@ Get scripture text by reference.
 }
 ```
 
-### get_cache_stats
-
-Get cache statistics including hit rate and entry count.
-
-**Parameters:** None
-
 ## Development
 
 ### Setup Development Environment
@@ -281,7 +271,6 @@ jw-org-mcp/
 │   └── jw_org_mcp/
 │       ├── __init__.py       # Entry point
 │       ├── auth.py           # Authentication & CDN discovery
-│       ├── cache.py          # Caching layer
 │       ├── client.py         # JW.Org API client
 │       ├── config.py         # Configuration management
 │       ├── exceptions.py     # Custom exceptions
@@ -306,11 +295,9 @@ jw-org-mcp/
 ### Search Flow
 
 1. Parse user query to extract search terms
-2. Check cache for existing results
-3. Make authenticated API request if cache miss
-4. Parse and structure response
-5. Cache results for 15 minutes
-6. Return structured data
+2. Make authenticated API request
+3. Parse and structure response
+4. Return structured data
 
 ### Content Retrieval
 
@@ -318,8 +305,7 @@ jw-org-mcp/
 2. If the page is a publication index (table of contents), extract article links and return them
 3. Otherwise, parse article structure (title, paragraphs, references)
 4. Extract clean text without HTML artifacts
-5. Cache parsed content
-6. Return structured article data
+5. Return structured article data
 
 ## API Response Format
 
@@ -342,8 +328,7 @@ All responses include metadata for verification:
 
 ## Performance
 
-- **Response Time**: < 2 seconds for search queries (cached: < 100ms)
-- **Cache TTL**: 15 minutes (configurable)
+- **Response Time**: < 2 seconds for search queries
 - **Compression**: Brotli for all API requests
 - **Concurrency**: Async I/O with connection pooling
 

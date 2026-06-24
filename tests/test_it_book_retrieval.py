@@ -36,10 +36,11 @@ async def test_it_book_page_consolidation():
     entry3_html = '<div class="bodyTxt"><h1>Entry 3</h1><p>Content 3</p></div>'
     entry4_html = '<div class="bodyTxt"><h1>Entry 4</h1><p>Content 4</p></div>'
 
-    def mock_get_side_effect(url, params=None):
+    def mock_get_side_effect(url, params=None, **kwargs):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.history = []
         if "/1001" in str(url):
             mock_resp.text = entry1_html
         elif "/1002" in str(url):
@@ -82,10 +83,11 @@ async def test_it_book_word_heuristic():
     <div class="article lookup"></div>
     """
 
-    def mock_get_side_effect(url, params=None):
+    def mock_get_side_effect(url, params=None, **kwargs):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.history = []
         mock_resp.text = lookup_html if "/100" not in str(url) else '<div class="bodyTxt"><p>Content</p></div>'
         mock_resp.url = MagicMock()
         mock_resp.url.join = lambda x: x

@@ -9,7 +9,6 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from .auth import AuthManager
-from .cache import Cache
 from .config import settings
 from .exceptions import ContentRetrievalError, SearchError
 from .models import (
@@ -28,83 +27,16 @@ logger = logging.getLogger(__name__)
 class JWOrgClient:
     """Client for interacting with JW.Org APIs."""
 
-    # Mapping from MCP language codes to WOL language and library codes
-    WOL_LANG_MAP = {
-        "E": {"code": "en", "lib": "lp-e"},
-        "T": {"code": "pt", "lib": "lp-t"},
-        "S": {"code": "es", "lib": "lp-s"},
-    }
+    # Debug flag to enable paragraph filtering
+    ENABLE_PARAGRAPH_FILTERING = False
+
+    # Debug flag to log final response content
+    LOG_RESPONSE_CONTENT = True
 
     def __init__(self) -> None:
         """Initialize the client."""
         self._auth_manager = AuthManager()
-        self._cache = Cache(ttl_seconds=settings.cache_ttl_seconds)
         self._http_client: httpx.AsyncClient | None = None
-
-    async def _get_wol_base_url(self, wol_code: str) -> str:
-        """Dynamically discover the WOL base URL for a language.
-
-        Args:
-            wol_code: WOL language code (e.g., 'en', 'pt', 'es')
-
-        Returns:
-            The discovered base URL
-        """
-        cache_key = f"wol_base_url:{wol_code}"
-        if settings.enable_cache:
-            cached = self._cache.get(cache_key)
-            if cached:
-                return cached
-
-        try:
-            # Navigate to wol.jw.org/{wol_code} to see where it redirects
-            discovery_url = f"https://wol.jw.org/{wol_code}"
-            logger.info(f"Discovering WOL base URL via: {discovery_url}")
-
-            client = await self._get_http_client()
-            # client follows redirects by default in _get_http_client
-
-            # Efficiently discover: use streaming to only read enough for form action
-            # and follows redirects automatically
-            base_url = None
-            async with client.stream("GET", discovery_url) as response:
-                response.raise_for_status()
-
-                # Try to find action in headers or initial body chunk
-                # We read up to 16KB which should be plenty for the head and form tags
-                chunk = b""
-                async for b in response.aiter_bytes(16384):
-                    chunk = b
-                    break
-                html = chunk.decode("utf-8", errors="ignore")
-
-                match = re.search(r'action="([^"]+)"', html)
-                if match:
-                    action_url = match.group(1)
-                    if action_url.startswith("/"):
-                        base_url = f"https://wol.jw.org{action_url}"
-                    else:
-                        base_url = action_url
-                else:
-                    # Fallback to the final redirected URL
-                    base_url = str(response.url)
-
-            if base_url:
-                # Ensure we only cache the base URL without query parameters or fragments
-                parsed = urlparse(base_url)
-                base_url = parsed._replace(query="", fragment="").geturl()
-
-            if settings.enable_cache:
-                # Cache for 24 hours (86400s) as these paths don't change often
-                self._cache.set(cache_key, value=base_url, ttl_seconds=86400)
-
-            return base_url
-
-        except Exception as e:
-            logger.warning(f"Failed to discover dynamic WOL base URL for {wol_code}: {e}")
-            raise ContentRetrievalError(
-                f"Failed to discover WOL base URL for {wol_code}: {e}"
-            ) from e
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client."""
@@ -147,16 +79,6 @@ class JWOrgClient:
 
         # Parse query to extract meaningful search terms
         search_terms = QueryParser.extract_search_terms(query)
-
-        # Check cache
-        cache_key_parts = (search_terms, filter_type, lang, offset)
-        if settings.enable_cache:
-            cached = self._cache.get(*cache_key_parts)
-            if cached is not None:
-                logger.info(f"Cache hit for search: {search_terms}")
-                response, metadata = cached
-                metadata.cache_hit = True
-                return response, metadata
 
         try:
             # Get CDN and auth
@@ -213,10 +135,6 @@ class JWOrgClient:
                 cache_hit=False,
             )
 
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(*cache_key_parts, value=(search_response, metadata))
-
             return search_response, metadata
 
         except httpx.HTTPError as e:
@@ -244,15 +162,6 @@ class JWOrgClient:
         Raises:
             ContentRetrievalError: If content retrieval fails
         """
-        # Check cache
-        if settings.enable_cache:
-            cached = self._cache.get(url, "article")
-            if cached is not None:
-                logger.info(f"Cache hit for article: {url}")
-                content, metadata = cached
-                metadata.cache_hit = True
-                return content, metadata
-
         try:
             logger.info(f"Fetching article: {url}")
 
@@ -270,10 +179,6 @@ class JWOrgClient:
                 query_params={"url": url},
                 cache_hit=False,
             )
-
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(url, "article", value=(article, metadata))
 
             return article, metadata
 
@@ -344,16 +249,6 @@ class JWOrgClient:
         lang = language or settings.default_language
         extracted_id = self._extract_video_id(video_id)
 
-        # Check cache
-        cache_key = f"captions:{extracted_id}:{lang}"
-        if settings.enable_cache:
-            cached = self._cache.get(cache_key)
-            if cached is not None:
-                logger.info(f"Cache hit for video captions: {extracted_id}")
-                content, metadata = cached
-                metadata.cache_hit = True
-                return content, metadata
-
         try:
             # Step 1: Get media metadata from CDN
             cdn_info = await self._auth_manager.discover_cdn()
@@ -404,10 +299,6 @@ class JWOrgClient:
                 cache_hit=False,
             )
 
-            # Cache result
-            if settings.enable_cache:
-                self._cache.set(cache_key, value=(captions, metadata))
-
             return captions, metadata
 
         except httpx.HTTPError as e:
@@ -417,31 +308,26 @@ class JWOrgClient:
             logger.error(f"Unexpected error fetching video captions: {e}")
             raise ContentRetrievalError(f"Unexpected error fetching video captions: {e}") from e
 
-    async def _get_with_manual_307_handling(
-        self, client: httpx.AsyncClient, url: str, params: dict[str, Any] | None = None, max_redirects: int = 3
+    async def _get_with_manual_redirect_handling(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, Any] | None = None,
+        wol_code: str | None = None,
     ) -> httpx.Response:
-        """Execute a GET request and manually follow 307 redirects.
+        """Execute a GET request and manually follow redirects.
 
         Args:
             client: The HTTP client
             url: The URL to fetch
             params: Optional query parameters
-            max_redirects: Maximum number of 307 redirects to follow
+            wol_code: Optional WOL language code (unused)
 
         Returns:
             The final HTTP response
         """
-        response = await client.get(url, params=params)
-
-        redirect_count = 0
-        while response.status_code == 307 and "Location" in response.headers and redirect_count < max_redirects:
-            location = response.headers["Location"]
-            # Handle relative URLs by joining with the current response URL
-            redirect_url = str(response.url.join(location))
-            logger.info(f"Handling manual 307 redirect ({redirect_count + 1}) to: {redirect_url}")
-            response = await client.get(redirect_url)
-            redirect_count += 1
-
+        # Use automatic redirect following
+        response = await client.get(url, params=params, follow_redirects=True)
         return response
 
     async def get_wol_reference(
@@ -469,7 +355,6 @@ class JWOrgClient:
             ContentRetrievalError: If content retrieval fails
         """
         lang_code = language or settings.default_language
-        wol_info = self.WOL_LANG_MAP.get(lang_code, self.WOL_LANG_MAP["E"])
 
         # Support semicolon-separated queries
         sub_queries = [q.strip() for q in query.split(";") if q.strip()]
@@ -501,45 +386,24 @@ class JWOrgClient:
                 if para_match.group(2):
                     e_para = int(para_match.group(2))
 
-            # Check cache
-            cache_key = f"wol_ref:{sub_query}:{s_para}:{e_para}:{lang_code}"
-            if settings.enable_cache:
-                cached = self._cache.get(cache_key)
-                if cached is not None:
-                    logger.info(f"Cache hit for WOL reference: {sub_query}")
-                    content, metadata = cached
-                    all_combined_paragraphs.extend(content.paragraphs)
-                    final_source_urls.append(content.source_url)
-                    all_pages_found.update(content.pages)
-                    continue
-
             try:
-                base_url = await self._get_wol_base_url(wol_info["code"])
+                # Use the finder endpoint with wtlocale and query
+                search_url = "https://wol.jw.org/wol/finder"
+                params = {"wtlocale": lang_code, "q": sub_query}
 
-                # Use cleaned query for search if it contains paragraph markers
-                search_query = sub_query
-                if para_match:
-                    search_query = WOLParser.clean_query(sub_query)
-
-                logger.info(f"Fetching WOL reference: {base_url} (query={search_query})")
+                logger.info(f"Fetching WOL reference via finder: {search_url} (params={params})")
                 client = await self._get_http_client()
-                response = await self._get_with_manual_307_handling(
-                    client, base_url, params={"q": search_query}
+                response = await self._get_with_manual_redirect_handling(
+                    client,
+                    search_url,
+                    params=params
                 )
-
-                if response.status_code == 404:
-                    logger.warning(f"404 received for base_url {base_url}. Redetecting...")
-                    self._cache.remove(f"wol_base_url:{wol_info['code']}")
-                    base_url = await self._get_wol_base_url(wol_info["code"])
-                    logger.info(f"Retrying with new base_url: {base_url}")
-                    response = await self._get_with_manual_307_handling(
-                        client, base_url, params={"q": search_query}
-                    )
 
                 response.raise_for_status()
 
                 html = response.text
                 final_url = str(response.url)
+                logger.info(f"Final resolved URL for '{sub_query}': {final_url}")
 
                 # Check for direct article content even on lookup page
                 direct_paragraphs = WOLParser.parse_paragraphs(html)
@@ -571,7 +435,9 @@ class JWOrgClient:
                     for path in article_paths:
                         f_url = f"https://wol.jw.org{path}"
                         logger.info(f"Following lookup link: {f_url}")
-                        resp = await self._get_with_manual_307_handling(client, f_url)
+                        resp = await self._get_with_manual_redirect_handling(
+                            client, f_url
+                        )
 
                         resp.raise_for_status()
                         sub_all_paragraphs.extend(WOLParser.parse_paragraphs(resp.text))
@@ -583,39 +449,28 @@ class JWOrgClient:
                         final_source_urls.append(str(resp.url))
                         all_pages_found.update(WOLParser.extract_page_markers(resp.text))
 
-                    requested_paragraphs = WOLParser.locate_paragraphs(
-                        sub_all_paragraphs, s_para, e_para, s_page, e_page
-                    )
+                    if self.ENABLE_PARAGRAPH_FILTERING:
+                        requested_paragraphs = WOLParser.locate_paragraphs(
+                            sub_all_paragraphs, s_para, e_para, s_page, e_page
+                        )
+                    else:
+                        requested_paragraphs = sub_all_paragraphs
                 else:
                     # Direct article
                     all_paragraphs = WOLParser.parse_paragraphs(html)
                     if not all_paragraphs:
                         raise ContentRetrievalError(f"No paragraphs found in article: {final_url}")
 
-                    requested_paragraphs = WOLParser.locate_paragraphs(
-                        all_paragraphs, s_para, e_para, s_page, e_page
-                    )
+                    if self.ENABLE_PARAGRAPH_FILTERING:
+                        requested_paragraphs = WOLParser.locate_paragraphs(
+                            all_paragraphs, s_para, e_para, s_page, e_page
+                        )
+                    else:
+                        requested_paragraphs = all_paragraphs
                     final_source_urls.append(final_url)
                     all_pages_found.update(WOLParser.extract_page_markers(html))
 
                 all_combined_paragraphs.extend(requested_paragraphs)
-
-                # Cache individual sub-query result
-                if settings.enable_cache:
-                    individual_content = WOLReferenceResponse(
-                        query=sub_query,
-                        paragraphs=requested_paragraphs,
-                        total_paragraphs_in_article=len(requested_paragraphs), # Not perfectly accurate but works for cache
-                        pages=sorted(list(all_pages_found)),
-                        source_url=final_url,
-                    )
-                    self._cache.set(cache_key, value=(individual_content, ResponseMetadata(
-                        source_domain="wol.jw.org",
-                        source_url=final_url,
-                        timestamp=datetime.now(UTC),
-                        query_params={"query": sub_query},
-                        cache_hit=False,
-                    )))
 
             except httpx.HTTPError as e:
                 logger.error(f"HTTP error fetching WOL reference '{sub_query}': {e}")
@@ -638,6 +493,10 @@ class JWOrgClient:
             pages=sorted(list(all_pages_found)),
             source_url="; ".join(list(set(final_source_urls))),
         )
+
+        if self.LOG_RESPONSE_CONTENT:
+            combined_text = "\n\n".join([p.text for p in all_combined_paragraphs])
+            logger.info(f"Combined response content for '{query}':\n{combined_text}")
 
         metadata = ResponseMetadata(
             source_domain="wol.jw.org",
@@ -695,18 +554,6 @@ class JWOrgClient:
         )
 
         return scripture_data, metadata
-
-    def get_cache_stats(self) -> dict[str, Any]:
-        """Get cache statistics.
-
-        Returns:
-            Cache statistics
-        """
-        return self._cache.get_stats()
-
-    def clear_cache(self) -> None:
-        """Clear the cache."""
-        self._cache.clear()
 
     async def close(self) -> None:
         """Close all connections."""

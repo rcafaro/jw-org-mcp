@@ -52,10 +52,6 @@ uv run mypy src/jw_org_mcp
 Set environment variables with the `JWORG_MCP_` prefix:
 
 ```bash
-# Cache settings
-export JWORG_MCP_CACHE_TTL_SECONDS=900
-export JWORG_MCP_ENABLE_CACHE=true
-
 # Request timeout
 export JWORG_MCP_REQUEST_TIMEOUT=30
 
@@ -137,15 +133,6 @@ Search natural language expressions (not publication references)
 }
 ```
 
-### Get Cache Stats
-
-```json
-{
-  "name": "get_cache_stats",
-  "arguments": {}
-}
-```
-
 ## Project Structure
 
 ```
@@ -153,7 +140,6 @@ jw-org-mcp/
 ├── src/jw_org_mcp/
 │   ├── __init__.py       # Entry point & main
 │   ├── auth.py           # Authentication & CDN discovery
-│   ├── cache.py          # Caching layer
 │   ├── client.py         # JW.Org API client
 │   ├── config.py         # Configuration
 │   ├── exceptions.py     # Custom exceptions

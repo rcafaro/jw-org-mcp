@@ -525,44 +525,44 @@ class WOLParser:
         if start_page is not None and start_num is None:
             if end_page is None:
                 end_page = start_page
-            
+
             # Find the first page marker to know the starting page if it's not explicitly set for early paragraphs
             first_marker_page = next((p.page for p in paragraphs if p.page is not None), None)
 
             results = []
             last_header = None
-            
+
             # Track if we have seen any page marker yet
             seen_any_marker = False
+            current_effective_page = first_marker_page
+
             for p in paragraphs:
-                # Determine if this element is in the requested page range
-                in_range = False
                 if p.page is not None:
                     seen_any_marker = True
-                    if start_page <= p.page <= end_page:
+                    current_effective_page = p.page
+
+                # Determine if this element is in the requested page range
+                in_range = False
+                if current_effective_page is not None:
+                    if start_page <= current_effective_page <= end_page:
                         in_range = True
                 elif not seen_any_marker:
-                    # If it's before any marker, check if the first marker is in range
-                    # Heuristic: elements before any marker belong to the first marker's page
-                    if first_marker_page is not None and start_page <= first_marker_page <= end_page:
-                        in_range = True
                     # Fallback for small pages with no markers
-                    elif first_marker_page is None:
-                        in_range = True
-                
+                    in_range = True
+
                 if p.is_header:
                     last_header = p
-                
+
                 if in_range:
                     # If we found content in range, ensure we include the last seen header
                     if last_header and last_header not in results:
                         results.append(last_header)
                     if p not in results:
                         results.append(p)
-            
+
             if results:
                 return results
-            
+
             # If no results and we have no page markers at all, return everything
             # (handles small it-2 lookup pages)
             if not seen_any_marker:
@@ -592,17 +592,16 @@ class WOLParser:
 
         results: list[WOLParagraph] = []
         for n in range(start_num, end_num + 1):
-            encontrado = None
+            encontrados: list[WOLParagraph] = []
 
-            # Method 1: Explicit paragraph number (skip questions and headers)
+            # Method 1: Explicit paragraph number (skip headers)
             matches = [p for p in work_set if p.number == n and not p.is_header]
             if matches:
-                matches.sort(key=lambda x: (not x.is_body, x.is_question))
-                if not matches[0].is_question:
-                    encontrado = matches[0]
+                # If we have matches, we include all of them (e.g. question and answer)
+                encontrados.extend(matches)
 
-            # Method 2: Positional counting
-            if not encontrado:
+            # Method 2: Positional counting (if no explicit number matches)
+            if not encontrados:
                 filtered = [
                     p
                     for i, p in enumerate(work_set)
@@ -611,16 +610,17 @@ class WOLParser:
                     and not p.is_header
                 ]
                 if 1 <= n <= len(filtered):
-                    encontrado = filtered[n - 1]
+                    encontrados.append(filtered[n - 1])
 
-            # Method 3: Simple count
-            if not encontrado:
+            # Method 3: Simple count (last resort)
+            if not encontrados:
                 no_questions_or_headers = [p for p in work_set if not p.is_question and not p.is_header]
                 if 1 <= n <= len(no_questions_or_headers):
-                    encontrado = no_questions_or_headers[n - 1]
+                    encontrados.append(no_questions_or_headers[n - 1])
 
-            if encontrado:
-                results.append(encontrado)
+            for e in encontrados:
+                if e not in results:
+                    results.append(e)
 
         return results
 

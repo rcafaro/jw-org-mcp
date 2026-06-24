@@ -53,3 +53,4 @@ Thumbs.db
 .env.local
 .claude/
 .idea/
+.jw_org_mcp_wol_cache.json
